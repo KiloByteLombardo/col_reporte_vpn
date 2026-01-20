@@ -194,10 +194,33 @@ class ExcelProcessor:
     # PASO 4: PROCESAR Y CRUZAR DATAFRAMES
     # =========================================================================
     
+    def _find_column(self, df: pd.DataFrame, possible_names: list) -> str:
+        """
+        Busca una columna en el DataFrame que coincida con alguno de los nombres posibles
+        
+        Args:
+            df: DataFrame donde buscar
+            possible_names: Lista de posibles nombres de columna
+        
+        Returns:
+            Nombre de la columna encontrada o None
+        """
+        for col in df.columns:
+            col_upper = str(col).upper().strip()
+            for name in possible_names:
+                if name.upper() in col_upper:
+                    return col
+        return None
+    
     def process_and_merge(self) -> bool:
         """
         Procesa y cruza los DataFrames R033 y R065 filtrado
-        Crea el DataFrame de resultado final
+        
+        Lógica:
+        1. Toma el R065 filtrado como base
+        2. Crea la columna "Centro de Costo"
+        3. Hace un cruce por Orden de Compra con R033
+        4. Trae el Centro de Costo del R033
         """
         print(f"\n[PASO 4 - PROCESAR] Iniciando procesamiento y cruce...")
         
@@ -206,22 +229,120 @@ class ExcelProcessor:
             df_r033_work = self.df_r033.copy()
             df_r065_work = self.df_r065_filtrado.copy()
             
-            # Agregar metadatos
+            print(f"[PASO 4 - PROCESAR] R033: {len(df_r033_work)} filas")
+            print(f"[PASO 4 - PROCESAR] R065 filtrado: {len(df_r065_work)} filas")
+            
+            # -----------------------------------------------------------------
+            # PASO 4.1: Identificar columnas de Orden de Compra
+            # -----------------------------------------------------------------
+            print(f"\n[PASO 4.1 - COLUMNAS OC] Buscando columnas de Orden de Compra...")
+            
+            # Buscar columna OC en R065
+            oc_col_r065 = self._find_column(df_r065_work, ["ORDEN COMPRA", "ORDEN_COMPRA", "OC"])
+            if oc_col_r065 is None:
+                print(f"[PASO 4.1 - COLUMNAS OC] ✗ No se encontró columna OC en R065")
+                print(f"[PASO 4.1 - COLUMNAS OC] Columnas disponibles: {list(df_r065_work.columns)}")
+                self.error_occurred = True
+                self.error_message = "No se encontró columna Orden de Compra en R065"
+                return False
+            print(f"[PASO 4.1 - COLUMNAS OC] ✓ R065 OC: '{oc_col_r065}'")
+            
+            # Buscar columna OC en R033
+            oc_col_r033 = self._find_column(df_r033_work, ["Orden de Compra", "ORDEN DE COMPRA", "OC"])
+            if oc_col_r033 is None:
+                print(f"[PASO 4.1 - COLUMNAS OC] ✗ No se encontró columna OC en R033")
+                print(f"[PASO 4.1 - COLUMNAS OC] Columnas disponibles: {list(df_r033_work.columns)}")
+                self.error_occurred = True
+                self.error_message = "No se encontró columna Orden de Compra en R033"
+                return False
+            print(f"[PASO 4.1 - COLUMNAS OC] ✓ R033 OC: '{oc_col_r033}'")
+            
+            # -----------------------------------------------------------------
+            # PASO 4.2: Identificar columna Tienda en R033 (será Centro de Costo)
+            # -----------------------------------------------------------------
+            print(f"\n[PASO 4.2 - CENTRO COSTO] Buscando columna 'Tienda' en R033...")
+            
+            # Buscar columna Tienda en R033 (se traerá como Centro de Costo)
+            cc_col_r033 = self._find_column(df_r033_work, ["Tienda", "TIENDA"])
+            
+            if cc_col_r033 is None:
+                print(f"[PASO 4.2 - CENTRO COSTO] ⚠ No se encontró columna 'Tienda' en R033")
+                print(f"[PASO 4.2 - CENTRO COSTO] Columnas disponibles en R033:")
+                for col in df_r033_work.columns:
+                    print(f"[PASO 4.2 - CENTRO COSTO]   - {col}")
+                # Continuar sin Centro de Costo
+                cc_col_r033 = None
+            else:
+                print(f"[PASO 4.2 - CENTRO COSTO] ✓ Columna 'Tienda' encontrada: '{cc_col_r033}'")
+                print(f"[PASO 4.2 - CENTRO COSTO]   Se mapeará a 'Centro de Costo' en el resultado")
+            
+            # -----------------------------------------------------------------
+            # PASO 4.3: Preparar R033 para el cruce (solo columnas necesarias)
+            # -----------------------------------------------------------------
+            print(f"\n[PASO 4.3 - PREPARAR CRUCE] Preparando datos para el merge...")
+            
+            if cc_col_r033:
+                # Crear DataFrame de lookup con OC y Centro de Costo
+                df_r033_lookup = df_r033_work[[oc_col_r033, cc_col_r033]].copy()
+                df_r033_lookup = df_r033_lookup.rename(columns={
+                    oc_col_r033: 'OC_MERGE',
+                    cc_col_r033: 'Centro de Costo'
+                })
+            else:
+                # Si no hay Centro de Costo, crear columna vacía
+                df_r033_lookup = df_r033_work[[oc_col_r033]].copy()
+                df_r033_lookup = df_r033_lookup.rename(columns={oc_col_r033: 'OC_MERGE'})
+                df_r033_lookup['Centro de Costo'] = ''
+            
+            # Eliminar duplicados de OC (quedarse con el primero)
+            df_r033_lookup = df_r033_lookup.drop_duplicates(subset=['OC_MERGE'], keep='first')
+            print(f"[PASO 4.3 - PREPARAR CRUCE] R033 lookup: {len(df_r033_lookup)} OCs únicas")
+            
+            # Preparar R065 para el merge
+            df_r065_work['OC_MERGE'] = df_r065_work[oc_col_r065].astype(str).str.strip()
+            df_r033_lookup['OC_MERGE'] = df_r033_lookup['OC_MERGE'].astype(str).str.strip()
+            
+            # -----------------------------------------------------------------
+            # PASO 4.4: Realizar el cruce (LEFT JOIN)
+            # -----------------------------------------------------------------
+            print(f"\n[PASO 4.4 - MERGE] Realizando cruce por Orden de Compra...")
+            
+            self.df_resultado = df_r065_work.merge(
+                df_r033_lookup[['OC_MERGE', 'Centro de Costo']],
+                on='OC_MERGE',
+                how='left'
+            )
+            
+            # Eliminar columna temporal de merge
+            self.df_resultado = self.df_resultado.drop(columns=['OC_MERGE'])
+            
+            # Contar cuántos registros tienen Centro de Costo
+            con_cc = self.df_resultado['Centro de Costo'].notna().sum()
+            sin_cc = self.df_resultado['Centro de Costo'].isna().sum()
+            
+            print(f"[PASO 4.4 - MERGE] ✓ Cruce completado")
+            print(f"[PASO 4.4 - MERGE]   - Total filas: {len(self.df_resultado)}")
+            print(f"[PASO 4.4 - MERGE]   - Con Centro de Costo: {con_cc}")
+            print(f"[PASO 4.4 - MERGE]   - Sin Centro de Costo: {sin_cc}")
+            
+            # -----------------------------------------------------------------
+            # PASO 4.5: Agregar metadatos
+            # -----------------------------------------------------------------
+            print(f"\n[PASO 4.5 - METADATOS] Agregando metadatos...")
+            
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            df_r033_work['origen'] = 'R033'
-            df_r033_work['fecha_procesamiento'] = timestamp
-            df_r065_work['origen'] = 'R065'
-            df_r065_work['fecha_procesamiento'] = timestamp
+            self.df_resultado['fecha_procesamiento'] = timestamp
             
-            print(f"[PASO 4 - PROCESAR] R033 preparado: {len(df_r033_work)} filas")
-            print(f"[PASO 4 - PROCESAR] R065 filtrado preparado: {len(df_r065_work)} filas")
-            
-            # TODO: Aquí va la lógica de cruce específica
-            # Por ahora, el resultado es el R065 filtrado
-            self.df_resultado = df_r065_work.copy()
+            # Reorganizar columnas para que Centro de Costo esté al principio
+            cols = list(self.df_resultado.columns)
+            if 'Centro de Costo' in cols:
+                cols.remove('Centro de Costo')
+                cols.insert(0, 'Centro de Costo')
+                self.df_resultado = self.df_resultado[cols]
             
             print(f"[PASO 4 - PROCESAR] ✓ Procesamiento completado")
             print(f"[PASO 4 - PROCESAR]   - Filas en resultado: {len(self.df_resultado)}")
+            print(f"[PASO 4 - PROCESAR]   - Columnas: {list(self.df_resultado.columns)}")
             
             return True
             
