@@ -198,22 +198,31 @@ class ExcelProcessor:
     # PASO 4: PROCESAR Y CRUZAR DATAFRAMES
     # =========================================================================
     
-    def _find_column(self, df: pd.DataFrame, possible_names: list) -> str:
+    def _find_column(self, df: pd.DataFrame, possible_names: list, exact_match: bool = False) -> str:
         """
         Busca una columna en el DataFrame que coincida con alguno de los nombres posibles
         
         Args:
             df: DataFrame donde buscar
             possible_names: Lista de posibles nombres de columna
+            exact_match: Si True, busca coincidencia exacta. Si False, busca si contiene el nombre.
         
         Returns:
             Nombre de la columna encontrada o None
         """
         for col in df.columns:
-            col_upper = str(col).upper().strip()
+            col_clean = str(col).strip()
+            col_upper = col_clean.upper()
             for name in possible_names:
-                if name.upper() in col_upper:
-                    return col
+                name_upper = name.upper().strip()
+                if exact_match:
+                    # Coincidencia exacta (ignorando mayúsculas/minúsculas)
+                    if col_upper == name_upper:
+                        return col
+                else:
+                    # Coincidencia parcial
+                    if name_upper in col_upper:
+                        return col
         return None
     
     def process_and_merge(self) -> bool:
@@ -266,8 +275,8 @@ class ExcelProcessor:
             # -----------------------------------------------------------------
             print(f"\n[PASO 4.2 - CENTRO COSTO] Buscando columna 'Tienda' en R033...")
             
-            # Buscar columna Tienda en R033 (se traerá como Centro de Costo)
-            cc_col_r033 = self._find_column(df_r033_work, ["Tienda", "TIENDA"])
+            # Buscar columna Tienda en R033 (coincidencia EXACTA para evitar "Cód. Tienda")
+            cc_col_r033 = self._find_column(df_r033_work, ["Tienda"], exact_match=True)
             
             if cc_col_r033 is None:
                 print(f"[PASO 4.2 - CENTRO COSTO] ⚠ No se encontró columna 'Tienda' en R033")
@@ -281,38 +290,60 @@ class ExcelProcessor:
                 print(f"[PASO 4.2 - CENTRO COSTO]   Se mapeará a 'Centro de Costo' en el resultado")
             
             # -----------------------------------------------------------------
-            # PASO 4.3: Preparar R033 para el cruce (solo columnas necesarias)
+            # PASO 4.3: Buscar columna Estatus en R033
             # -----------------------------------------------------------------
-            print(f"\n[PASO 4.3 - PREPARAR CRUCE] Preparando datos para el merge...")
+            print(f"\n[PASO 4.3 - ESTATUS] Buscando columna 'Estatus' en R033...")
+            
+            estatus_col_r033 = self._find_column(df_r033_work, ["Estatus"], exact_match=True)
+            if estatus_col_r033:
+                print(f"[PASO 4.3 - ESTATUS] ✓ Columna encontrada: '{estatus_col_r033}'")
+            else:
+                print(f"[PASO 4.3 - ESTATUS] ⚠ No se encontró columna 'Estatus' en R033")
+            
+            # -----------------------------------------------------------------
+            # PASO 4.4: Preparar R033 para el cruce (columnas necesarias)
+            # -----------------------------------------------------------------
+            print(f"\n[PASO 4.4 - PREPARAR CRUCE] Preparando datos para el merge...")
+            
+            # Columnas a traer del R033
+            cols_to_merge = [oc_col_r033]
+            rename_dict = {oc_col_r033: 'OC_MERGE'}
             
             if cc_col_r033:
-                # Crear DataFrame de lookup con OC y Centro de Costo
-                df_r033_lookup = df_r033_work[[oc_col_r033, cc_col_r033]].copy()
-                df_r033_lookup = df_r033_lookup.rename(columns={
-                    oc_col_r033: 'OC_MERGE',
-                    cc_col_r033: 'Centro de Costo'
-                })
-            else:
-                # Si no hay Centro de Costo, crear columna vacía
-                df_r033_lookup = df_r033_work[[oc_col_r033]].copy()
-                df_r033_lookup = df_r033_lookup.rename(columns={oc_col_r033: 'OC_MERGE'})
+                cols_to_merge.append(cc_col_r033)
+                rename_dict[cc_col_r033] = 'Centro de Costo'
+            
+            if estatus_col_r033:
+                cols_to_merge.append(estatus_col_r033)
+                rename_dict[estatus_col_r033] = 'Estatus R033'
+            
+            # Crear DataFrame de lookup
+            df_r033_lookup = df_r033_work[cols_to_merge].copy()
+            df_r033_lookup = df_r033_lookup.rename(columns=rename_dict)
+            
+            # Si no hay Centro de Costo, crear columna vacía
+            if 'Centro de Costo' not in df_r033_lookup.columns:
                 df_r033_lookup['Centro de Costo'] = ''
+            
+            # Si no hay Estatus, crear columna vacía
+            if 'Estatus R033' not in df_r033_lookup.columns:
+                df_r033_lookup['Estatus R033'] = ''
             
             # Eliminar duplicados de OC (quedarse con el primero)
             df_r033_lookup = df_r033_lookup.drop_duplicates(subset=['OC_MERGE'], keep='first')
-            print(f"[PASO 4.3 - PREPARAR CRUCE] R033 lookup: {len(df_r033_lookup)} OCs únicas")
+            print(f"[PASO 4.4 - PREPARAR CRUCE] R033 lookup: {len(df_r033_lookup)} OCs únicas")
             
             # Preparar R065 para el merge
             df_r065_work['OC_MERGE'] = df_r065_work[oc_col_r065].astype(str).str.strip()
             df_r033_lookup['OC_MERGE'] = df_r033_lookup['OC_MERGE'].astype(str).str.strip()
             
             # -----------------------------------------------------------------
-            # PASO 4.4: Realizar el cruce (LEFT JOIN)
+            # PASO 4.5: Realizar el cruce (LEFT JOIN)
             # -----------------------------------------------------------------
-            print(f"\n[PASO 4.4 - MERGE] Realizando cruce por Orden de Compra...")
+            print(f"\n[PASO 4.5 - MERGE] Realizando cruce por Orden de Compra...")
             
             self.df_resultado = df_r065_work.merge(
-                df_r033_lookup[['OC_MERGE', 'Centro de Costo']],
+                df_r033_lookup[['OC_MERGE', 'Centro de Costo', 'Estatus R033']],
                 on='OC_MERGE',
                 how='left'
             )
@@ -321,30 +352,51 @@ class ExcelProcessor:
             self.df_resultado = self.df_resultado.drop(columns=['OC_MERGE'])
             
             # Contar cuántos registros tienen Centro de Costo
+            filas_antes = len(self.df_resultado)
             con_cc = self.df_resultado['Centro de Costo'].notna().sum()
             sin_cc = self.df_resultado['Centro de Costo'].isna().sum()
             
-            print(f"[PASO 4.4 - MERGE] ✓ Cruce completado")
-            print(f"[PASO 4.4 - MERGE]   - Total filas: {len(self.df_resultado)}")
-            print(f"[PASO 4.4 - MERGE]   - Con Centro de Costo: {con_cc}")
-            print(f"[PASO 4.4 - MERGE]   - Sin Centro de Costo: {sin_cc}")
+            print(f"[PASO 4.5 - MERGE] ✓ Cruce completado")
+            print(f"[PASO 4.5 - MERGE]   - Total filas: {filas_antes}")
+            print(f"[PASO 4.5 - MERGE]   - Con Centro de Costo: {con_cc}")
+            print(f"[PASO 4.5 - MERGE]   - Sin Centro de Costo: {sin_cc}")
             
             # -----------------------------------------------------------------
-            # PASO 4.5: Agregar metadatos
+            # PASO 4.6: Eliminar filas sin Centro de Costo
             # -----------------------------------------------------------------
-            print(f"\n[PASO 4.5 - METADATOS] Agregando metadatos...")
+            print(f"\n[PASO 4.6 - LIMPIAR] Eliminando filas sin Centro de Costo...")
             
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            self.df_resultado['fecha_procesamiento'] = timestamp
+            self.df_resultado = self.df_resultado[
+                self.df_resultado['Centro de Costo'].notna() & 
+                (self.df_resultado['Centro de Costo'].astype(str).str.strip() != '')
+            ].copy()
             
-            # Reorganizar columnas para que Centro de Costo esté al principio
-            cols = list(self.df_resultado.columns)
-            if 'Centro de Costo' in cols:
-                cols.remove('Centro de Costo')
-                cols.insert(0, 'Centro de Costo')
-                self.df_resultado = self.df_resultado[cols]
+            filas_despues = len(self.df_resultado)
+            filas_eliminadas = filas_antes - filas_despues
             
-            print(f"[PASO 4 - PROCESAR] ✓ Procesamiento completado")
+            print(f"[PASO 4.6 - LIMPIAR] ✓ Limpieza completada")
+            print(f"[PASO 4.6 - LIMPIAR]   - Filas eliminadas: {filas_eliminadas}")
+            print(f"[PASO 4.6 - LIMPIAR]   - Filas restantes: {filas_despues}")
+            
+            # -----------------------------------------------------------------
+            # PASO 4.7: Crear columna Grupo de Pago
+            # -----------------------------------------------------------------
+            print(f"\n[PASO 4.7 - GRUPO PAGO] Creando columna 'Grupo de Pago'...")
+            
+            # Si Centro de Costo contiene "CENDIS" → "CENDIS", sino → "Directo"
+            self.df_resultado['Grupo de Pago'] = self.df_resultado['Centro de Costo'].apply(
+                lambda x: 'CENDIS' if 'CENDIS' in str(x).upper() else 'Directo'
+            )
+            
+            # Contar distribución
+            grupo_cendis = (self.df_resultado['Grupo de Pago'] == 'CENDIS').sum()
+            grupo_directo = (self.df_resultado['Grupo de Pago'] == 'Directo').sum()
+            
+            print(f"[PASO 4.7 - GRUPO PAGO] ✓ Columna creada")
+            print(f"[PASO 4.7 - GRUPO PAGO]   - CENDIS: {grupo_cendis}")
+            print(f"[PASO 4.7 - GRUPO PAGO]   - Directo: {grupo_directo}")
+            
+            print(f"\n[PASO 4 - PROCESAR] ✓ Procesamiento completado")
             print(f"[PASO 4 - PROCESAR]   - Filas en resultado: {len(self.df_resultado)}")
             print(f"[PASO 4 - PROCESAR]   - Columnas: {list(self.df_resultado.columns)}")
             
@@ -360,6 +412,105 @@ class ExcelProcessor:
     # PASO 5: CREAR EXCEL (HILO 1) - OPTIMIZADO CON XLSXWRITER
     # =========================================================================
     
+    def _create_resumen(self) -> pd.DataFrame:
+        """
+        Crea el DataFrame de resumen agrupado por proveedor
+        
+        Columnas:
+        - Proveedor
+        - Número de Facturas (facturas únicas)
+        - Monto Total (suma de montos de facturas únicas, sin duplicar por ítems)
+        - Número de Ítems (filas/registros)
+        """
+        print(f"\n[PASO 5.1 - RESUMEN] Creando tabla resumen por proveedor...")
+        
+        try:
+            df = self.df_resultado.copy()
+            
+            # Identificar columnas necesarias
+            proveedor_col = self._find_column(df, ["NOMBRE PROVEEDOR PADRE"], exact_match=True)
+            factura_col = self._find_column(df, ["NRO FACTURA"])
+            monto_col = self._find_column(df, ["TOTAL"], exact_match=True)
+            item_col = self._find_column(df, ["ITEM 1"], exact_match=True)  # Columna de ítem
+            
+            if proveedor_col is None:
+                print(f"[PASO 5.1 - RESUMEN] ⚠ No se encontró columna de proveedor")
+                return pd.DataFrame()
+            
+            print(f"[PASO 5.1 - RESUMEN] Columna proveedor: '{proveedor_col}'")
+            print(f"[PASO 5.1 - RESUMEN] Columna factura: '{factura_col}'")
+            print(f"[PASO 5.1 - RESUMEN] Columna monto: '{monto_col}'")
+            print(f"[PASO 5.1 - RESUMEN] Columna ítem: '{item_col}'")
+            
+            # Convertir monto a numérico
+            if monto_col:
+                df[monto_col] = pd.to_numeric(df[monto_col], errors='coerce').fillna(0)
+            
+            # -----------------------------------------------------------------
+            # PASO 1: Contar ítems ÚNICOS por proveedor
+            # -----------------------------------------------------------------
+            if item_col:
+                # Contar valores únicos de la columna ITEM
+                df_items = df.groupby(proveedor_col)[item_col].nunique().reset_index(name='Número de Ítems')
+            else:
+                # Si no hay columna de ítem, contar filas
+                df_items = df.groupby(proveedor_col).size().reset_index(name='Número de Ítems')
+            
+            # -----------------------------------------------------------------
+            # PASO 2: Obtener facturas únicas con su monto (evitar duplicar monto por ítem)
+            # El monto de la factura se repite en cada ítem, así que tomamos solo el primero
+            # -----------------------------------------------------------------
+            if factura_col and monto_col:
+                # Obtener una fila por cada combinación proveedor + factura
+                df_facturas = df.drop_duplicates(subset=[proveedor_col, factura_col])[[proveedor_col, factura_col, monto_col]]
+                
+                # Agrupar por proveedor: contar facturas y sumar montos únicos
+                df_montos = df_facturas.groupby(proveedor_col).agg(
+                    **{
+                        'Número de Facturas': (factura_col, 'nunique'),
+                        'Monto Total': (monto_col, 'sum')
+                    }
+                ).reset_index()
+            elif factura_col:
+                df_montos = df.groupby(proveedor_col).agg(
+                    **{'Número de Facturas': (factura_col, 'nunique')}
+                ).reset_index()
+                df_montos['Monto Total'] = 0
+            else:
+                df_montos = df.groupby(proveedor_col).size().reset_index(name='Número de Facturas')
+                df_montos['Monto Total'] = 0
+            
+            # -----------------------------------------------------------------
+            # PASO 3: Combinar resultados
+            # -----------------------------------------------------------------
+            df_resumen = df_montos.merge(df_items, on=proveedor_col, how='left')
+            df_resumen = df_resumen.rename(columns={proveedor_col: 'Proveedor'})
+            
+            # Reordenar columnas
+            cols_order = ['Proveedor', 'Número de Facturas', 'Monto Total', 'Número de Ítems']
+            df_resumen = df_resumen[[c for c in cols_order if c in df_resumen.columns]]
+            
+            # Ordenar por monto total descendente
+            if 'Monto Total' in df_resumen.columns:
+                df_resumen = df_resumen.sort_values('Monto Total', ascending=False)
+            
+            print(f"[PASO 5.1 - RESUMEN] ✓ Resumen creado: {len(df_resumen)} proveedores")
+            
+            # Mostrar totales
+            total_facturas = df_resumen['Número de Facturas'].sum() if 'Número de Facturas' in df_resumen.columns else 0
+            total_monto = df_resumen['Monto Total'].sum() if 'Monto Total' in df_resumen.columns else 0
+            total_items = df_resumen['Número de Ítems'].sum() if 'Número de Ítems' in df_resumen.columns else 0
+            
+            print(f"[PASO 5.1 - RESUMEN]   - Total facturas: {total_facturas}")
+            print(f"[PASO 5.1 - RESUMEN]   - Total monto: {total_monto:,.2f}")
+            print(f"[PASO 5.1 - RESUMEN]   - Total ítems: {total_items}")
+            
+            return df_resumen
+            
+        except Exception as e:
+            print(f"[PASO 5.1 - RESUMEN] ✗ Error creando resumen: {str(e)}")
+            return pd.DataFrame()
+    
     def create_excel(self, output_path: str, include_originals: bool = False) -> bool:
         """
         Crea el archivo Excel de retorno (optimizado con xlsxwriter)
@@ -373,9 +524,17 @@ class ExcelProcessor:
         start_time = datetime.now()
         
         try:
+            # Crear resumen antes de escribir el Excel
+            df_resumen = self._create_resumen()
+            
             # Usar xlsxwriter que es mucho más rápido que openpyxl
             with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
-                # Hoja principal - SOLO EL RESULTADO
+                # Hoja Resumen primero
+                if not df_resumen.empty:
+                    df_resumen.to_excel(writer, sheet_name='Resumen', index=False)
+                    print(f"[PASO 5 - CREAR EXCEL]   - Hoja 'Resumen' creada ({len(df_resumen)} proveedores)")
+                
+                # Hoja principal - Resultado
                 self.df_resultado.to_excel(writer, sheet_name='Resultado', index=False)
                 print(f"[PASO 5 - CREAR EXCEL]   - Hoja 'Resultado' creada ({len(self.df_resultado)} filas)")
                 
