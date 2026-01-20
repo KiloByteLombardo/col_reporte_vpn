@@ -9,6 +9,10 @@ import os
 from connections import BigQueryConnection, GCSConnection
 
 
+# =============================================================================
+# CONSTANTES
+# =============================================================================
+
 # Cabezales esperados para cada archivo
 HEADERS_R033 = [
     "Orden de Compra", "Código Proveedor", "Sucursal Proveedor", "Proveedor",
@@ -28,6 +32,10 @@ HEADERS_R065 = [
 MENSAJE_FILTRO_R065 = "No se encuentra en RMS el ítem para esta factura"
 
 
+# =============================================================================
+# CLASE PRINCIPAL
+# =============================================================================
+
 class ExcelProcessor:
     """Clase principal para procesar los archivos Excel R033 y R065"""
     
@@ -46,7 +54,11 @@ class ExcelProcessor:
         self.bq_connection = BigQueryConnection()
         self.gcs_connection = GCSConnection()
     
-    def _find_header_row(self, file_path, expected_headers: list, max_rows: int = 20) -> int:
+    # =========================================================================
+    # PASO 1: ENCONTRAR CABEZALES
+    # =========================================================================
+    
+    def find_header_row(self, file_path, expected_headers: list, max_rows: int = 20) -> int:
         """
         Busca la fila donde se encuentran los cabezales esperados
         
@@ -58,6 +70,8 @@ class ExcelProcessor:
         Returns:
             Número de fila donde están los cabezales (0-indexed), -1 si no se encuentra
         """
+        print(f"[PASO 1 - CABEZALES] Buscando cabezales en archivo...")
+        
         try:
             # Leer las primeras filas sin cabezal
             df_preview = pd.read_excel(file_path, header=None, nrows=max_rows, engine='openpyxl')
@@ -70,54 +84,78 @@ class ExcelProcessor:
                 match_ratio = matches / len(expected_headers)
                 
                 if match_ratio >= 0.7:  # Al menos 70% de coincidencia
-                    print(f"[HEADER] Cabezales encontrados en fila {row_idx} ({matches}/{len(expected_headers)} coincidencias)")
+                    print(f"[PASO 1 - CABEZALES] ✓ Cabezales encontrados en fila {row_idx} ({matches}/{len(expected_headers)} coincidencias)")
                     return row_idx
             
-            print(f"[HEADER] No se encontraron cabezales. Usando fila 0 por defecto.")
+            print(f"[PASO 1 - CABEZALES] ⚠ No se encontraron cabezales. Usando fila 0 por defecto.")
             return 0
             
         except Exception as e:
-            print(f"[HEADER] Error buscando cabezales: {str(e)}")
+            print(f"[PASO 1 - CABEZALES] ✗ Error buscando cabezales: {str(e)}")
             return 0
     
-    def load_excel_files(self, r033_file, r065_file) -> bool:
-        """Carga los archivos Excel R033 y R065 en DataFrames, detectando automáticamente los cabezales"""
+    # =========================================================================
+    # PASO 2: CARGAR ARCHIVOS
+    # =========================================================================
+    
+    def load_r033(self, file_path) -> bool:
+        """Carga el archivo R033 en un DataFrame"""
+        print(f"\n[PASO 2A - CARGAR R033] Iniciando carga...")
+        
         try:
-            # Cargar R033
-            print("[LOAD] Buscando cabezales en archivo R033...")
-            header_row_r033 = self._find_header_row(r033_file, HEADERS_R033)
+            header_row = self.find_header_row(file_path, HEADERS_R033)
+            self.df_r033 = pd.read_excel(file_path, header=header_row, engine='openpyxl')
             
-            print(f"[LOAD] Cargando archivo R033 (cabezales en fila {header_row_r033})...")
-            self.df_r033 = pd.read_excel(r033_file, header=header_row_r033, engine='openpyxl')
-            print(f"[LOAD] R033 cargado: {len(self.df_r033)} filas, {len(self.df_r033.columns)} columnas")
-            print(f"[LOAD] Columnas R033: {list(self.df_r033.columns)}")
-            
-            # Cargar R065
-            print("[LOAD] Buscando cabezales en archivo R065...")
-            header_row_r065 = self._find_header_row(r065_file, HEADERS_R065)
-            
-            print(f"[LOAD] Cargando archivo R065 (cabezales en fila {header_row_r065})...")
-            self.df_r065 = pd.read_excel(r065_file, header=header_row_r065, engine='openpyxl')
-            print(f"[LOAD] R065 cargado: {len(self.df_r065)} filas, {len(self.df_r065.columns)} columnas")
-            print(f"[LOAD] Columnas R065: {list(self.df_r065.columns)}")
+            print(f"[PASO 2A - CARGAR R033] ✓ Archivo cargado")
+            print(f"[PASO 2A - CARGAR R033]   - Filas: {len(self.df_r033)}")
+            print(f"[PASO 2A - CARGAR R033]   - Columnas: {len(self.df_r033.columns)}")
+            print(f"[PASO 2A - CARGAR R033]   - Nombres: {list(self.df_r033.columns)}")
             
             return True
+            
         except Exception as e:
-            print(f"[LOAD] Error al cargar archivos: {str(e)}")
+            print(f"[PASO 2A - CARGAR R033] ✗ Error: {str(e)}")
             self.error_occurred = True
-            self.error_message = str(e)
+            self.error_message = f"Error cargando R033: {str(e)}"
             return False
     
-    def _filter_r065(self) -> pd.DataFrame:
+    def load_r065(self, file_path) -> bool:
+        """Carga el archivo R065 en un DataFrame"""
+        print(f"\n[PASO 2B - CARGAR R065] Iniciando carga...")
+        
+        try:
+            header_row = self.find_header_row(file_path, HEADERS_R065)
+            self.df_r065 = pd.read_excel(file_path, header=header_row, engine='openpyxl')
+            
+            print(f"[PASO 2B - CARGAR R065] ✓ Archivo cargado")
+            print(f"[PASO 2B - CARGAR R065]   - Filas: {len(self.df_r065)}")
+            print(f"[PASO 2B - CARGAR R065]   - Columnas: {len(self.df_r065.columns)}")
+            print(f"[PASO 2B - CARGAR R065]   - Nombres: {list(self.df_r065.columns)}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"[PASO 2B - CARGAR R065] ✗ Error: {str(e)}")
+            self.error_occurred = True
+            self.error_message = f"Error cargando R065: {str(e)}"
+            return False
+    
+    # =========================================================================
+    # PASO 3: FILTRAR R065
+    # =========================================================================
+    
+    def filter_r065(self) -> bool:
         """
         Filtra el DataFrame R065 por el mensaje específico
         Solo mantiene las filas donde MENSAJE = "No se encuentra en RMS el ítem para esta factura"
         """
+        print(f"\n[PASO 3 - FILTRAR R065] Iniciando filtrado...")
+        print(f"[PASO 3 - FILTRAR R065] Filtro: MENSAJE = '{MENSAJE_FILTRO_R065}'")
+        
         try:
-            print(f"[FILTER] Filtrando R065 por MENSAJE = '{MENSAJE_FILTRO_R065}'")
-            print(f"[FILTER] Filas antes del filtro: {len(self.df_r065)}")
+            filas_antes = len(self.df_r065)
             
-            # Buscar la columna MENSAJE (puede tener variaciones en el nombre)
+            # Buscar la columna MENSAJE
             mensaje_col = None
             for col in self.df_r065.columns:
                 if 'MENSAJE' in str(col).upper():
@@ -125,150 +163,224 @@ class ExcelProcessor:
                     break
             
             if mensaje_col is None:
-                print("[FILTER] ADVERTENCIA: No se encontró la columna MENSAJE en R065")
+                print("[PASO 3 - FILTRAR R065] ⚠ No se encontró la columna MENSAJE")
                 self.df_r065_filtrado = self.df_r065.copy()
-                return self.df_r065_filtrado
+                return True
             
-            print(f"[FILTER] Columna de mensaje encontrada: '{mensaje_col}'")
+            print(f"[PASO 3 - FILTRAR R065] Columna encontrada: '{mensaje_col}'")
             
-            # Filtrar por el mensaje específico
+            # Aplicar filtro
             self.df_r065_filtrado = self.df_r065[
                 self.df_r065[mensaje_col].astype(str).str.strip() == MENSAJE_FILTRO_R065
             ].copy()
             
-            print(f"[FILTER] Filas después del filtro: {len(self.df_r065_filtrado)}")
-            print(f"[FILTER] Filas eliminadas: {len(self.df_r065) - len(self.df_r065_filtrado)}")
+            filas_despues = len(self.df_r065_filtrado)
+            filas_eliminadas = filas_antes - filas_despues
             
-            return self.df_r065_filtrado
+            print(f"[PASO 3 - FILTRAR R065] ✓ Filtrado completado")
+            print(f"[PASO 3 - FILTRAR R065]   - Filas antes: {filas_antes}")
+            print(f"[PASO 3 - FILTRAR R065]   - Filas después: {filas_despues}")
+            print(f"[PASO 3 - FILTRAR R065]   - Filas eliminadas: {filas_eliminadas}")
+            
+            return True
             
         except Exception as e:
-            print(f"[FILTER] Error al filtrar R065: {str(e)}")
-            self.df_r065_filtrado = self.df_r065.copy()
-            return self.df_r065_filtrado
+            print(f"[PASO 3 - FILTRAR R065] ✗ Error: {str(e)}")
+            self.error_occurred = True
+            self.error_message = f"Error filtrando R065: {str(e)}"
+            return False
     
-    def process_dataframes(self) -> pd.DataFrame:
+    # =========================================================================
+    # PASO 4: PROCESAR Y CRUZAR DATAFRAMES
+    # =========================================================================
+    
+    def process_and_merge(self) -> bool:
         """
-        Procesa y cruza los DataFrames R033 y R065
-        1. Filtra R065 por el mensaje específico
-        2. Crea el DataFrame de resultado
+        Procesa y cruza los DataFrames R033 y R065 filtrado
+        Crea el DataFrame de resultado final
         """
+        print(f"\n[PASO 4 - PROCESAR] Iniciando procesamiento y cruce...")
+        
         try:
-            print("[PROCESS] Iniciando procesamiento de DataFrames...")
-            
-            # Paso 1: Filtrar R065
-            self._filter_r065()
-            
-            if self.error_occurred:
-                return pd.DataFrame()
-            
-            # Paso 2: Preparar DataFrames para el cruce
+            # Preparar DataFrames
             df_r033_work = self.df_r033.copy()
             df_r065_work = self.df_r065_filtrado.copy()
             
-            print(f"[PROCESS] R033 tiene {len(df_r033_work)} filas")
-            print(f"[PROCESS] R065 filtrado tiene {len(df_r065_work)} filas")
-            
-            # Agregar columna de origen y timestamp
+            # Agregar metadatos
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             df_r033_work['origen'] = 'R033'
             df_r033_work['fecha_procesamiento'] = timestamp
             df_r065_work['origen'] = 'R065'
             df_r065_work['fecha_procesamiento'] = timestamp
             
-            # Paso 3: Crear DataFrame de resultado
-            # TODO: Aquí puedes agregar la lógica de cruce específica
-            # Por ahora, el resultado es el R065 filtrado con las columnas adicionales
+            print(f"[PASO 4 - PROCESAR] R033 preparado: {len(df_r033_work)} filas")
+            print(f"[PASO 4 - PROCESAR] R065 filtrado preparado: {len(df_r065_work)} filas")
+            
+            # TODO: Aquí va la lógica de cruce específica
+            # Por ahora, el resultado es el R065 filtrado
             self.df_resultado = df_r065_work.copy()
             
-            print(f"[PROCESS] Procesamiento completado: {len(self.df_resultado)} filas resultantes")
+            print(f"[PASO 4 - PROCESAR] ✓ Procesamiento completado")
+            print(f"[PASO 4 - PROCESAR]   - Filas en resultado: {len(self.df_resultado)}")
             
-            return self.df_resultado
+            return True
             
         except Exception as e:
-            print(f"[PROCESS] Error en procesamiento: {str(e)}")
+            print(f"[PASO 4 - PROCESAR] ✗ Error: {str(e)}")
             self.error_occurred = True
-            self.error_message = str(e)
-            return pd.DataFrame()
+            self.error_message = f"Error en procesamiento: {str(e)}"
+            return False
     
-    def _thread_create_excel(self, output_path: str):
-        """Hilo 1: Crea el archivo Excel de retorno"""
+    # =========================================================================
+    # PASO 5: CREAR EXCEL (HILO 1)
+    # =========================================================================
+    
+    def create_excel(self, output_path: str) -> bool:
+        """Crea el archivo Excel de retorno con múltiples hojas"""
+        print(f"\n[PASO 5 - CREAR EXCEL] Iniciando creación...")
+        print(f"[PASO 5 - CREAR EXCEL] Ruta: {output_path}")
+        
         try:
-            print("[THREAD-EXCEL] Esperando que el procesamiento termine...")
-            self.processing_complete.wait()
-            
-            if self.error_occurred:
-                print("[THREAD-EXCEL] Error detectado, abortando creación de Excel")
-                return
-            
-            print(f"[THREAD-EXCEL] Creando archivo Excel en: {output_path}")
-            
-            # Crear el archivo Excel con formato
             with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-                # Hoja principal con el resultado
+                # Hoja principal
                 self.df_resultado.to_excel(writer, sheet_name='Resultado', index=False)
+                print(f"[PASO 5 - CREAR EXCEL]   - Hoja 'Resultado' creada")
                 
-                # Hoja con R065 filtrado
+                # Hoja R065 filtrado
                 if self.df_r065_filtrado is not None:
                     self.df_r065_filtrado.to_excel(writer, sheet_name='R065_Filtrado', index=False)
+                    print(f"[PASO 5 - CREAR EXCEL]   - Hoja 'R065_Filtrado' creada")
                 
-                # Hojas con datos originales
+                # Hojas originales
                 if self.df_r033 is not None:
                     self.df_r033.to_excel(writer, sheet_name='R033_Original', index=False)
+                    print(f"[PASO 5 - CREAR EXCEL]   - Hoja 'R033_Original' creada")
+                
                 if self.df_r065 is not None:
                     self.df_r065.to_excel(writer, sheet_name='R065_Original', index=False)
+                    print(f"[PASO 5 - CREAR EXCEL]   - Hoja 'R065_Original' creada")
             
             self.excel_path = output_path
-            print(f"[THREAD-EXCEL] Excel creado exitosamente: {output_path}")
-            self.excel_ready.set()
+            print(f"[PASO 5 - CREAR EXCEL] ✓ Excel creado exitosamente")
+            
+            return True
             
         except Exception as e:
-            print(f"[THREAD-EXCEL] Error al crear Excel: {str(e)}")
+            print(f"[PASO 5 - CREAR EXCEL] ✗ Error: {str(e)}")
             self.error_occurred = True
-            self.error_message = str(e)
-            self.excel_ready.set()
+            self.error_message = f"Error creando Excel: {str(e)}"
+            return False
     
-    def _thread_process_and_upload(self, table_name: str = "reporte_vpn"):
-        """Hilo 2: Procesa el DataFrame y lo envía a BigQuery"""
+    # =========================================================================
+    # PASO 6: SUBIR A BIGQUERY (HILO 2)
+    # =========================================================================
+    
+    def upload_to_bigquery(self, table_name: str = "reporte_vpn") -> bool:
+        """Sube el DataFrame de resultado a BigQuery"""
+        print(f"\n[PASO 6 - BIGQUERY] Iniciando subida...")
+        print(f"[PASO 6 - BIGQUERY] Tabla destino: {table_name}")
+        
         try:
-            print("[THREAD-BQ] Iniciando procesamiento...")
+            if not self.bq_connection.connect():
+                print("[PASO 6 - BIGQUERY] ⚠ No se pudo conectar, continuando sin subir")
+                return False
             
-            # Procesar los DataFrames
-            self.process_dataframes()
+            success = self.bq_connection.insert_dataframe(
+                self.df_resultado, 
+                table_name, 
+                if_exists="append"
+            )
             
-            if self.error_occurred:
-                print("[THREAD-BQ] Error en procesamiento, abortando")
-                self.processing_complete.set()
-                return
-            
-            # Señalar que el procesamiento está completo
-            self.processing_complete.set()
-            print("[THREAD-BQ] Procesamiento completado, DataFrame listo")
-            
-            # Intentar conectar y subir a BigQuery
-            print("[THREAD-BQ] Conectando a BigQuery...")
-            if self.bq_connection.connect():
-                print(f"[THREAD-BQ] Insertando datos en tabla: {table_name}")
-                success = self.bq_connection.insert_dataframe(
-                    self.df_resultado, 
-                    table_name, 
-                    if_exists="append"
-                )
-                if success:
-                    print("[THREAD-BQ] Datos insertados exitosamente en BigQuery")
-                else:
-                    print("[THREAD-BQ] Error al insertar datos en BigQuery")
+            if success:
+                print(f"[PASO 6 - BIGQUERY] ✓ Datos insertados: {len(self.df_resultado)} filas")
             else:
-                print("[THREAD-BQ] No se pudo conectar a BigQuery, continuando sin subir datos")
+                print("[PASO 6 - BIGQUERY] ✗ Error al insertar datos")
+            
+            return success
             
         except Exception as e:
-            print(f"[THREAD-BQ] Error: {str(e)}")
-            self.error_occurred = True
-            self.error_message = str(e)
-            self.processing_complete.set()
+            print(f"[PASO 6 - BIGQUERY] ✗ Error: {str(e)}")
+            return False
     
-    def execute(self, r033_file, r065_file, output_path: str = None, table_name: str = "reporte_vpn") -> dict:
+    # =========================================================================
+    # FUNCIONES DE HILOS
+    # =========================================================================
+    
+    def _thread_excel_worker(self, output_path: str):
+        """Hilo 1: Espera el procesamiento y crea el Excel"""
+        print("\n[HILO-EXCEL] Iniciado, esperando procesamiento...")
+        self.processing_complete.wait()
+        
+        if self.error_occurred:
+            print("[HILO-EXCEL] Error detectado, abortando")
+            self.excel_ready.set()
+            return
+        
+        self.create_excel(output_path)
+        self.excel_ready.set()
+        print("[HILO-EXCEL] Finalizado")
+    
+    def _thread_bq_worker(self, table_name: str):
+        """Hilo 2: Procesa los datos y los sube a BigQuery"""
+        print("\n[HILO-BQ] Iniciado")
+        
+        # Ejecutar pasos 3 y 4
+        if not self.filter_r065():
+            self.processing_complete.set()
+            return
+        
+        if not self.process_and_merge():
+            self.processing_complete.set()
+            return
+        
+        # Señalar que el procesamiento terminó
+        self.processing_complete.set()
+        print("[HILO-BQ] Procesamiento completado, señal enviada")
+        
+        # Subir a BigQuery
+        self.upload_to_bigquery(table_name)
+        print("[HILO-BQ] Finalizado")
+    
+    def start_threads(self, output_path: str, table_name: str):
+        """Inicia los dos hilos de procesamiento"""
+        print("\n[HILOS] Iniciando hilos de procesamiento...")
+        
+        thread_excel = threading.Thread(
+            target=self._thread_excel_worker, 
+            args=(output_path,),
+            name="Thread-Excel"
+        )
+        thread_bq = threading.Thread(
+            target=self._thread_bq_worker, 
+            args=(table_name,),
+            name="Thread-BigQuery"
+        )
+        
+        thread_excel.start()
+        thread_bq.start()
+        
+        print("[HILOS] Esperando a que los hilos terminen...")
+        thread_bq.join()
+        thread_excel.join()
+        
+        print("[HILOS] ✓ Todos los hilos finalizados")
+    
+    # =========================================================================
+    # FUNCIÓN PRINCIPAL (MAIN)
+    # =========================================================================
+    
+    def main(self, r033_file, r065_file, output_path: str = None, table_name: str = "reporte_vpn") -> dict:
         """
-        Ejecuta el procesamiento completo usando dos hilos
+        FUNCIÓN PRINCIPAL - Orquesta todo el flujo de procesamiento
+        
+        Flujo:
+            1. Inicialización y validación
+            2. Cargar R033 (find_header_row + load_r033)
+            3. Cargar R065 (find_header_row + load_r065)
+            4. Iniciar hilos:
+               - Hilo 1: Espera → Crear Excel
+               - Hilo 2: Filtrar R065 → Procesar → Subir a BigQuery
+            5. Retornar resultado
         
         Args:
             r033_file: Archivo Excel R033 (path o file-like object)
@@ -279,7 +391,15 @@ class ExcelProcessor:
         Returns:
             dict con el resultado del procesamiento
         """
-        # Reiniciar eventos y estado
+        print("\n" + "=" * 70)
+        print("  INICIO DEL PROCESAMIENTO - REPORTE VPN")
+        print("=" * 70)
+        
+        # ---------------------------------------------------------------------
+        # PASO 0: INICIALIZACIÓN
+        # ---------------------------------------------------------------------
+        print("\n[PASO 0 - INIT] Inicializando...")
+        
         self.processing_complete.clear()
         self.excel_ready.clear()
         self.error_occurred = False
@@ -290,55 +410,50 @@ class ExcelProcessor:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             output_path = f"results/reporte_vpn_{timestamp}.xlsx"
         
-        # Asegurar que existe el directorio de resultados
+        # Asegurar que existe el directorio
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
-        print("=" * 60)
-        print("[EXECUTE] Iniciando procesamiento de archivos VPN")
-        print("=" * 60)
+        print(f"[PASO 0 - INIT] ✓ Output path: {output_path}")
+        print(f"[PASO 0 - INIT] ✓ Tabla BigQuery: {table_name}")
         
-        # Cargar archivos Excel
-        if not self.load_excel_files(r033_file, r065_file):
-            return {
-                "success": False,
-                "error": self.error_message,
-                "excel_path": None
-            }
+        # ---------------------------------------------------------------------
+        # PASO 1-2: CARGAR ARCHIVOS
+        # ---------------------------------------------------------------------
+        if not self.load_r033(r033_file):
+            return self._build_error_response()
         
-        # Crear los hilos
-        thread_excel = threading.Thread(
-            target=self._thread_create_excel, 
-            args=(output_path,),
-            name="Thread-Excel"
-        )
-        thread_bq = threading.Thread(
-            target=self._thread_process_and_upload, 
-            args=(table_name,),
-            name="Thread-BigQuery"
-        )
+        if not self.load_r065(r065_file):
+            return self._build_error_response()
         
-        print("[EXECUTE] Iniciando hilos de procesamiento...")
+        # ---------------------------------------------------------------------
+        # PASOS 3-6: EJECUTAR EN HILOS
+        # ---------------------------------------------------------------------
+        self.start_threads(output_path, table_name)
         
-        # Iniciar ambos hilos
-        thread_excel.start()
-        thread_bq.start()
-        
-        # Esperar a que ambos terminen
-        thread_bq.join()
-        thread_excel.join()
-        
-        print("=" * 60)
-        print("[EXECUTE] Procesamiento finalizado")
-        print("=" * 60)
+        # ---------------------------------------------------------------------
+        # RESULTADO FINAL
+        # ---------------------------------------------------------------------
+        print("\n" + "=" * 70)
+        print("  FIN DEL PROCESAMIENTO")
+        print("=" * 70)
         
         if self.error_occurred:
-            return {
-                "success": False,
-                "error": self.error_message,
-                "excel_path": None
-            }
+            return self._build_error_response()
         
+        return self._build_success_response()
+    
+    def _build_error_response(self) -> dict:
+        """Construye la respuesta de error"""
+        print(f"\n[RESULTADO] ✗ ERROR: {self.error_message}")
         return {
+            "success": False,
+            "error": self.error_message,
+            "excel_path": None
+        }
+    
+    def _build_success_response(self) -> dict:
+        """Construye la respuesta de éxito"""
+        response = {
             "success": True,
             "error": None,
             "excel_path": self.excel_path,
@@ -347,9 +462,29 @@ class ExcelProcessor:
             "rows_r065_original": len(self.df_r065) if self.df_r065 is not None else 0,
             "rows_r065_filtrado": len(self.df_r065_filtrado) if self.df_r065_filtrado is not None else 0
         }
+        
+        print(f"\n[RESULTADO] ✓ ÉXITO")
+        print(f"[RESULTADO]   - Excel: {response['excel_path']}")
+        print(f"[RESULTADO]   - Filas procesadas: {response['rows_processed']}")
+        print(f"[RESULTADO]   - R033: {response['rows_r033']} filas")
+        print(f"[RESULTADO]   - R065 original: {response['rows_r065_original']} filas")
+        print(f"[RESULTADO]   - R065 filtrado: {response['rows_r065_filtrado']} filas")
+        
+        return response
+    
+    # =========================================================================
+    # MÉTODO LEGACY (mantiene compatibilidad)
+    # =========================================================================
+    
+    def execute(self, r033_file, r065_file, output_path: str = None, table_name: str = "reporte_vpn") -> dict:
+        """Alias de main() para mantener compatibilidad"""
+        return self.main(r033_file, r065_file, output_path, table_name)
 
 
-# Función de conveniencia para uso directo
+# =============================================================================
+# FUNCIÓN DE CONVENIENCIA
+# =============================================================================
+
 def process_vpn_reports(r033_file, r065_file, output_path: str = None) -> dict:
     """
     Función de conveniencia para procesar reportes VPN
@@ -363,4 +498,4 @@ def process_vpn_reports(r033_file, r065_file, output_path: str = None) -> dict:
         dict con resultado del procesamiento
     """
     processor = ExcelProcessor()
-    return processor.execute(r033_file, r065_file, output_path)
+    return processor.main(r033_file, r065_file, output_path)
