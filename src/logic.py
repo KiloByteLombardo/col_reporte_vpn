@@ -55,61 +55,51 @@ class ExcelProcessor:
         self.gcs_connection = GCSConnection()
     
     # =========================================================================
-    # PASO 1: ENCONTRAR CABEZALES
+    # PASO 1-2: CARGAR ARCHIVOS (OPTIMIZADO - UNA SOLA LECTURA)
     # =========================================================================
     
-    def find_header_row(self, file_path, expected_headers: list, max_rows: int = 20) -> int:
+    def _find_header_in_dataframe(self, df: pd.DataFrame, expected_headers: list) -> int:
         """
-        Busca la fila donde se encuentran los cabezales esperados
-        
-        Args:
-            file_path: Ruta del archivo Excel
-            expected_headers: Lista de cabezales esperados
-            max_rows: Máximo de filas a revisar
-        
-        Returns:
-            Número de fila donde están los cabezales (0-indexed), -1 si no se encuentra
+        Busca la fila de cabezales en un DataFrame ya cargado (sin releer el archivo)
         """
-        print(f"[PASO 1 - CABEZALES] Buscando cabezales en archivo...")
+        max_rows = min(20, len(df))
         
-        try:
-            # Leer las primeras filas sin cabezal
-            df_preview = pd.read_excel(file_path, header=None, nrows=max_rows, engine='openpyxl')
+        for row_idx in range(max_rows):
+            row_values = df.iloc[row_idx].astype(str).str.strip().tolist()
+            matches = sum(1 for header in expected_headers if header in row_values)
+            match_ratio = matches / len(expected_headers)
             
-            for row_idx in range(len(df_preview)):
-                row_values = df_preview.iloc[row_idx].astype(str).str.strip().tolist()
-                
-                # Verificar si la mayoría de los cabezales esperados están en esta fila
-                matches = sum(1 for header in expected_headers if header in row_values)
-                match_ratio = matches / len(expected_headers)
-                
-                if match_ratio >= 0.7:  # Al menos 70% de coincidencia
-                    print(f"[PASO 1 - CABEZALES] ✓ Cabezales encontrados en fila {row_idx} ({matches}/{len(expected_headers)} coincidencias)")
-                    return row_idx
-            
-            print(f"[PASO 1 - CABEZALES] ⚠ No se encontraron cabezales. Usando fila 0 por defecto.")
-            return 0
-            
-        except Exception as e:
-            print(f"[PASO 1 - CABEZALES] ✗ Error buscando cabezales: {str(e)}")
-            return 0
-    
-    # =========================================================================
-    # PASO 2: CARGAR ARCHIVOS
-    # =========================================================================
+            if match_ratio >= 0.7:
+                return row_idx
+        
+        return 0
     
     def load_r033(self, file_path) -> bool:
-        """Carga el archivo R033 en un DataFrame"""
+        """Carga el archivo R033 en un DataFrame (lectura única optimizada)"""
         print(f"\n[PASO 2A - CARGAR R033] Iniciando carga...")
+        start_time = datetime.now()
         
         try:
-            header_row = self.find_header_row(file_path, HEADERS_R033)
-            self.df_r033 = pd.read_excel(file_path, header=header_row, engine='openpyxl')
+            # Leer todo el archivo de una vez sin cabezal
+            print(f"[PASO 2A - CARGAR R033] Leyendo archivo...")
+            df_raw = pd.read_excel(file_path, header=None, engine='openpyxl')
             
-            print(f"[PASO 2A - CARGAR R033] ✓ Archivo cargado")
+            # Encontrar fila de cabezales en memoria
+            header_row = self._find_header_in_dataframe(df_raw, HEADERS_R033)
+            print(f"[PASO 2A - CARGAR R033] Cabezales en fila {header_row}")
+            
+            # Ajustar DataFrame: usar fila como cabezal y eliminar filas anteriores
+            if header_row > 0:
+                df_raw.columns = df_raw.iloc[header_row]
+                self.df_r033 = df_raw.iloc[header_row + 1:].reset_index(drop=True)
+            else:
+                df_raw.columns = df_raw.iloc[0]
+                self.df_r033 = df_raw.iloc[1:].reset_index(drop=True)
+            
+            elapsed = (datetime.now() - start_time).total_seconds()
+            print(f"[PASO 2A - CARGAR R033] ✓ Cargado en {elapsed:.2f}s")
             print(f"[PASO 2A - CARGAR R033]   - Filas: {len(self.df_r033)}")
             print(f"[PASO 2A - CARGAR R033]   - Columnas: {len(self.df_r033.columns)}")
-            print(f"[PASO 2A - CARGAR R033]   - Nombres: {list(self.df_r033.columns)}")
             
             return True
             
@@ -120,17 +110,31 @@ class ExcelProcessor:
             return False
     
     def load_r065(self, file_path) -> bool:
-        """Carga el archivo R065 en un DataFrame"""
+        """Carga el archivo R065 en un DataFrame (lectura única optimizada)"""
         print(f"\n[PASO 2B - CARGAR R065] Iniciando carga...")
+        start_time = datetime.now()
         
         try:
-            header_row = self.find_header_row(file_path, HEADERS_R065)
-            self.df_r065 = pd.read_excel(file_path, header=header_row, engine='openpyxl')
+            # Leer todo el archivo de una vez sin cabezal
+            print(f"[PASO 2B - CARGAR R065] Leyendo archivo...")
+            df_raw = pd.read_excel(file_path, header=None, engine='openpyxl')
             
-            print(f"[PASO 2B - CARGAR R065] ✓ Archivo cargado")
+            # Encontrar fila de cabezales en memoria
+            header_row = self._find_header_in_dataframe(df_raw, HEADERS_R065)
+            print(f"[PASO 2B - CARGAR R065] Cabezales en fila {header_row}")
+            
+            # Ajustar DataFrame
+            if header_row > 0:
+                df_raw.columns = df_raw.iloc[header_row]
+                self.df_r065 = df_raw.iloc[header_row + 1:].reset_index(drop=True)
+            else:
+                df_raw.columns = df_raw.iloc[0]
+                self.df_r065 = df_raw.iloc[1:].reset_index(drop=True)
+            
+            elapsed = (datetime.now() - start_time).total_seconds()
+            print(f"[PASO 2B - CARGAR R065] ✓ Cargado en {elapsed:.2f}s")
             print(f"[PASO 2B - CARGAR R065]   - Filas: {len(self.df_r065)}")
             print(f"[PASO 2B - CARGAR R065]   - Columnas: {len(self.df_r065.columns)}")
-            print(f"[PASO 2B - CARGAR R065]   - Nombres: {list(self.df_r065.columns)}")
             
             return True
             
@@ -353,36 +357,45 @@ class ExcelProcessor:
             return False
     
     # =========================================================================
-    # PASO 5: CREAR EXCEL (HILO 1)
+    # PASO 5: CREAR EXCEL (HILO 1) - OPTIMIZADO CON XLSXWRITER
     # =========================================================================
     
-    def create_excel(self, output_path: str) -> bool:
-        """Crea el archivo Excel de retorno con múltiples hojas"""
+    def create_excel(self, output_path: str, include_originals: bool = False) -> bool:
+        """
+        Crea el archivo Excel de retorno (optimizado con xlsxwriter)
+        
+        Args:
+            output_path: Ruta del archivo de salida
+            include_originals: Si True, incluye hojas con datos originales (más lento)
+        """
         print(f"\n[PASO 5 - CREAR EXCEL] Iniciando creación...")
         print(f"[PASO 5 - CREAR EXCEL] Ruta: {output_path}")
+        start_time = datetime.now()
         
         try:
-            with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-                # Hoja principal
+            # Usar xlsxwriter que es mucho más rápido que openpyxl
+            with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
+                # Hoja principal - SOLO EL RESULTADO
                 self.df_resultado.to_excel(writer, sheet_name='Resultado', index=False)
-                print(f"[PASO 5 - CREAR EXCEL]   - Hoja 'Resultado' creada")
+                print(f"[PASO 5 - CREAR EXCEL]   - Hoja 'Resultado' creada ({len(self.df_resultado)} filas)")
                 
-                # Hoja R065 filtrado
-                if self.df_r065_filtrado is not None:
-                    self.df_r065_filtrado.to_excel(writer, sheet_name='R065_Filtrado', index=False)
-                    print(f"[PASO 5 - CREAR EXCEL]   - Hoja 'R065_Filtrado' creada")
-                
-                # Hojas originales
-                if self.df_r033 is not None:
-                    self.df_r033.to_excel(writer, sheet_name='R033_Original', index=False)
-                    print(f"[PASO 5 - CREAR EXCEL]   - Hoja 'R033_Original' creada")
-                
-                if self.df_r065 is not None:
-                    self.df_r065.to_excel(writer, sheet_name='R065_Original', index=False)
-                    print(f"[PASO 5 - CREAR EXCEL]   - Hoja 'R065_Original' creada")
+                # Hojas originales solo si se solicita (¡muy lento con archivos grandes!)
+                if include_originals:
+                    if self.df_r065_filtrado is not None:
+                        self.df_r065_filtrado.to_excel(writer, sheet_name='R065_Filtrado', index=False)
+                        print(f"[PASO 5 - CREAR EXCEL]   - Hoja 'R065_Filtrado' creada")
+                    
+                    if self.df_r033 is not None:
+                        self.df_r033.to_excel(writer, sheet_name='R033_Original', index=False)
+                        print(f"[PASO 5 - CREAR EXCEL]   - Hoja 'R033_Original' creada")
+                    
+                    if self.df_r065 is not None:
+                        self.df_r065.to_excel(writer, sheet_name='R065_Original', index=False)
+                        print(f"[PASO 5 - CREAR EXCEL]   - Hoja 'R065_Original' creada")
             
             self.excel_path = output_path
-            print(f"[PASO 5 - CREAR EXCEL] ✓ Excel creado exitosamente")
+            elapsed = (datetime.now() - start_time).total_seconds()
+            print(f"[PASO 5 - CREAR EXCEL] ✓ Excel creado en {elapsed:.2f}s")
             
             return True
             
@@ -512,6 +525,8 @@ class ExcelProcessor:
         Returns:
             dict con el resultado del procesamiento
         """
+        total_start_time = datetime.now()
+        
         print("\n" + "=" * 70)
         print("  INICIO DEL PROCESAMIENTO - REPORTE VPN")
         print("=" * 70)
@@ -538,12 +553,34 @@ class ExcelProcessor:
         print(f"[PASO 0 - INIT] ✓ Tabla BigQuery: {table_name}")
         
         # ---------------------------------------------------------------------
-        # PASO 1-2: CARGAR ARCHIVOS
+        # PASO 1-2: CARGAR ARCHIVOS EN PARALELO
         # ---------------------------------------------------------------------
-        if not self.load_r033(r033_file):
-            return self._build_error_response()
+        print("\n[PASO 1-2 - CARGA PARALELA] Cargando archivos en paralelo...")
+        load_start = datetime.now()
         
-        if not self.load_r065(r065_file):
+        load_errors = []
+        
+        def _load_r033_thread():
+            if not self.load_r033(r033_file):
+                load_errors.append("R033")
+        
+        def _load_r065_thread():
+            if not self.load_r065(r065_file):
+                load_errors.append("R065")
+        
+        # Cargar ambos archivos en paralelo
+        t1 = threading.Thread(target=_load_r033_thread)
+        t2 = threading.Thread(target=_load_r065_thread)
+        
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+        
+        load_elapsed = (datetime.now() - load_start).total_seconds()
+        print(f"\n[PASO 1-2 - CARGA PARALELA] ✓ Archivos cargados en {load_elapsed:.2f}s")
+        
+        if load_errors:
             return self._build_error_response()
         
         # ---------------------------------------------------------------------
@@ -554,8 +591,10 @@ class ExcelProcessor:
         # ---------------------------------------------------------------------
         # RESULTADO FINAL
         # ---------------------------------------------------------------------
+        total_elapsed = (datetime.now() - total_start_time).total_seconds()
+        
         print("\n" + "=" * 70)
-        print("  FIN DEL PROCESAMIENTO")
+        print(f"  FIN DEL PROCESAMIENTO - TIEMPO TOTAL: {total_elapsed:.2f}s")
         print("=" * 70)
         
         if self.error_occurred:
