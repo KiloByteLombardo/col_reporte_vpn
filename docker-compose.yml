@@ -1,0 +1,32 @@
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: col_reporte_vpn
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+      # Variables de Google Cloud (descomentar y configurar para producción)
+      # - GCP_PROJECT_ID=tu-proyecto-gcp
+      # - GCS_BUCKET_NAME=tu-bucket-gcs
+      # - BQ_DATASET_ID=tu-dataset-bigquery
+      # - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account.json
+    volumes:
+      # Montar código fuente para desarrollo (hot reload)
+      - ./src:/app/src
+      # Montar carpeta de resultados
+      - ./results:/app/src/results
+      # Montar credenciales de GCP (descomentar para producción)
+      # - ./credentials:/app/credentials:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
