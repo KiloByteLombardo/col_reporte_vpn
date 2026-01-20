@@ -5,6 +5,7 @@ from google.cloud import storage
 from google.cloud import bigquery
 import pandas as pd
 import os
+from datetime import timedelta
 
 
 class GCSConnection:
@@ -60,6 +61,78 @@ class GCSConnection:
         except Exception as e:
             print(f"[GCS] Error al subir DataFrame como Excel: {str(e)}")
             return False
+    
+    def blob_exists(self, blob_name: str) -> bool:
+        """Verifica si un blob existe en el bucket"""
+        try:
+            blob = self.bucket.blob(blob_name)
+            return blob.exists()
+        except Exception as e:
+            print(f"[GCS] Error al verificar blob: {str(e)}")
+            return False
+    
+    def list_files(self, prefix: str = None) -> list:
+        """
+        Lista los archivos en el bucket
+        
+        Args:
+            prefix: Prefijo para filtrar archivos (ej: 'reportes/')
+        
+        Returns:
+            Lista de diccionarios con información de cada archivo
+        """
+        try:
+            blobs = self.client.list_blobs(self.bucket_name, prefix=prefix)
+            files = []
+            for blob in blobs:
+                files.append({
+                    "name": blob.name,
+                    "size_bytes": blob.size,
+                    "created": blob.time_created.isoformat() if blob.time_created else None,
+                    "updated": blob.updated.isoformat() if blob.updated else None,
+                    "content_type": blob.content_type
+                })
+            print(f"[GCS] Archivos listados: {len(files)}")
+            return files
+        except Exception as e:
+            print(f"[GCS] Error al listar archivos: {str(e)}")
+            return []
+    
+    def get_signed_url(self, blob_name: str, expiration_hours: int = 1) -> str:
+        """
+        Genera una URL firmada para descargar un archivo
+        
+        Args:
+            blob_name: Nombre del blob
+            expiration_hours: Horas de validez de la URL
+        
+        Returns:
+            URL firmada o None si hay error
+        """
+        try:
+            blob = self.bucket.blob(blob_name)
+            url = blob.generate_signed_url(
+                version="v4",
+                expiration=timedelta(hours=expiration_hours),
+                method="GET"
+            )
+            print(f"[GCS] URL firmada generada para: {blob_name}")
+            return url
+        except Exception as e:
+            print(f"[GCS] Error al generar URL firmada: {str(e)}")
+            return None
+    
+    def get_public_url(self, blob_name: str) -> str:
+        """
+        Retorna la URL pública de un blob (solo funciona si el bucket es público)
+        
+        Args:
+            blob_name: Nombre del blob
+        
+        Returns:
+            URL pública del archivo
+        """
+        return f"https://storage.googleapis.com/{self.bucket_name}/{blob_name}"
 
 
 class BigQueryConnection:

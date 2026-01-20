@@ -2,22 +2,22 @@
 API Flask para el procesamiento de reportes VPN
 Recibe archivos Excel R033 y R065, los procesa y retorna el Excel resultante
 """
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, Response
 from werkzeug.utils import secure_filename
 import os
+import tempfile
 from datetime import datetime
 from logic import ExcelProcessor
+from connections import GCSConnection
 
 app = Flask(__name__)
 
 # Configuración
-UPLOAD_FOLDER = 'uploads'
 RESULTS_FOLDER = 'results'
 ALLOWED_EXTENSIONS = {'xlsx', 'xls'}
 
-# Crear carpetas necesarias
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(RESULTS_FOLDER, exist_ok=True)
+# Conexión a GCS (se inicializa en cada request o al inicio)
+gcs = GCSConnection()
 
 
 def allowed_file(filename: str) -> bool:
@@ -46,7 +46,7 @@ def process_files():
     - r065: Archivo Excel R065
     
     Retorna:
-    - El archivo Excel procesado
+    - JSON con el link del bucket para descargar el Excel
     """
     print("=" * 60)
     print("[API] Nueva solicitud de procesamiento recibida")
@@ -84,32 +84,32 @@ def process_files():
     
     print(f"[API] Archivos recibidos: R033={file_r033.filename}, R065={file_r065.filename}")
     
-    # Guardar archivos temporalmente
+    # Usar archivos temporales
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     
-    r033_filename = secure_filename(f"r033_{timestamp}_{file_r033.filename}")
-    r065_filename = secure_filename(f"r065_{timestamp}_{file_r065.filename}")
-    
-    r033_path = os.path.join(UPLOAD_FOLDER, r033_filename)
-    r065_path = os.path.join(UPLOAD_FOLDER, r065_filename)
-    
     try:
-        file_r033.save(r033_path)
-        file_r065.save(r065_path)
+        # Crear archivos temporales para los uploads
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_r033:
+            file_r033.save(tmp_r033.name)
+            r033_path = tmp_r033.name
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_r065:
+            file_r065.save(tmp_r065.name)
+            r065_path = tmp_r065.name
+        
         print(f"[API] Archivos guardados temporalmente")
-    except Exception as e:
-        print(f"[API] Error al guardar archivos: {str(e)}")
-        return jsonify({"error": f"Error al guardar archivos: {str(e)}"}), 500
-    
-    # Procesar los archivos
-    output_filename = f"reporte_vpn_{timestamp}.xlsx"
-    output_path = os.path.join(RESULTS_FOLDER, output_filename)
-    
-    try:
+        
+        # Procesar los archivos
+        output_filename = f"reporte_vpn_{timestamp}.xlsx"
+        
+        # Usar carpeta results local para el procesamiento
+        os.makedirs(RESULTS_FOLDER, exist_ok=True)
+        output_path = os.path.join(RESULTS_FOLDER, output_filename)
+        
         processor = ExcelProcessor()
         result = processor.execute(r033_path, r065_path, output_path)
         
-        # Limpiar archivos temporales
+        # Limpiar archivos temporales de entrada
         if os.path.exists(r033_path):
             os.remove(r033_path)
         if os.path.exists(r065_path):
@@ -120,129 +120,119 @@ def process_files():
             return jsonify({"error": result["error"]}), 500
         
         print(f"[API] Procesamiento exitoso: {result['rows_processed']} filas procesadas")
-        print(f"[API] Enviando archivo: {output_path}")
         
-        # Retornar el archivo Excel
-        return send_file(
-            output_path,
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            as_attachment=True,
-            download_name=output_filename
-        )
+        # Subir el archivo al bucket
+        if not gcs.connect():
+            print("[API] Error: No se pudo conectar a GCS")
+            return jsonify({
+                "success": True,
+                "message": "Procesamiento completado, pero no se pudo subir a GCS",
+                "rows_processed": result["rows_processed"],
+                "local_path": output_path,
+                "gcs_url": None
+            })
         
-    except Exception as e:
-        print(f"[API] Error inesperado: {str(e)}")
-        # Limpiar archivos temporales en caso de error
-        if os.path.exists(r033_path):
-            os.remove(r033_path)
-        if os.path.exists(r065_path):
-            os.remove(r065_path)
-        return jsonify({"error": f"Error inesperado: {str(e)}"}), 500
-
-
-@app.route('/process-json', methods=['POST'])
-def process_files_json():
-    """
-    Endpoint alternativo que retorna JSON con información del procesamiento
-    en lugar del archivo directamente
-    """
-    print("=" * 60)
-    print("[API] Nueva solicitud de procesamiento (JSON) recibida")
-    print("=" * 60)
-    
-    # Validar que se recibieron los archivos
-    if 'r033' not in request.files:
-        return jsonify({"error": "Archivo R033 es requerido"}), 400
-    
-    if 'r065' not in request.files:
-        return jsonify({"error": "Archivo R065 es requerido"}), 400
-    
-    file_r033 = request.files['r033']
-    file_r065 = request.files['r065']
-    
-    if file_r033.filename == '' or file_r065.filename == '':
-        return jsonify({"error": "Archivos sin nombre"}), 400
-    
-    if not allowed_file(file_r033.filename) or not allowed_file(file_r065.filename):
-        return jsonify({"error": "Los archivos deben ser Excel (.xlsx o .xls)"}), 400
-    
-    # Guardar archivos temporalmente
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    
-    r033_path = os.path.join(UPLOAD_FOLDER, secure_filename(f"r033_{timestamp}.xlsx"))
-    r065_path = os.path.join(UPLOAD_FOLDER, secure_filename(f"r065_{timestamp}.xlsx"))
-    output_path = os.path.join(RESULTS_FOLDER, f"reporte_vpn_{timestamp}.xlsx")
-    
-    try:
-        file_r033.save(r033_path)
-        file_r065.save(r065_path)
-        
-        processor = ExcelProcessor()
-        result = processor.execute(r033_path, r065_path, output_path)
-        
-        # Limpiar archivos temporales
-        if os.path.exists(r033_path):
-            os.remove(r033_path)
-        if os.path.exists(r065_path):
-            os.remove(r065_path)
-        
-        if result["success"]:
+        blob_name = f"reportes/{output_filename}"
+        if gcs.upload_file(output_path, blob_name):
+            # Generar URL de descarga
+            download_url = gcs.get_signed_url(blob_name)
+            public_url = gcs.get_public_url(blob_name)
+            
+            print(f"[API] Archivo subido a GCS: {blob_name}")
+            
+            # Limpiar archivo local después de subir
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            
             return jsonify({
                 "success": True,
                 "message": "Procesamiento completado exitosamente",
                 "rows_processed": result["rows_processed"],
-                "output_file": output_path,
+                "filename": output_filename,
+                "gcs_path": blob_name,
+                "download_url": download_url,
+                "public_url": public_url,
                 "timestamp": timestamp
             })
         else:
+            print("[API] Error al subir archivo a GCS")
             return jsonify({
-                "success": False,
-                "error": result["error"]
-            }), 500
-            
+                "success": True,
+                "message": "Procesamiento completado, pero error al subir a GCS",
+                "rows_processed": result["rows_processed"],
+                "local_path": output_path,
+                "gcs_url": None
+            })
+        
     except Exception as e:
-        print(f"[API] Error: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        print(f"[API] Error inesperado: {str(e)}")
+        # Limpiar archivos temporales en caso de error
+        for path in [r033_path, r065_path]:
+            if 'path' in dir() and os.path.exists(path):
+                os.remove(path)
+        return jsonify({"error": f"Error inesperado: {str(e)}"}), 500
 
 
 @app.route('/download/<filename>', methods=['GET'])
 def download_file(filename: str):
-    """Endpoint para descargar un archivo de resultados previamente generado"""
-    print(f"[API] Solicitud de descarga: {filename}")
+    """Endpoint para descargar un archivo del bucket de GCS"""
+    print(f"[API] Solicitud de descarga desde bucket: {filename}")
     
     # Sanitizar nombre de archivo
     safe_filename = secure_filename(filename)
-    file_path = os.path.join(RESULTS_FOLDER, safe_filename)
+    blob_name = f"reportes/{safe_filename}"
     
-    if not os.path.exists(file_path):
-        print(f"[API] Archivo no encontrado: {file_path}")
-        return jsonify({"error": "Archivo no encontrado"}), 404
+    # Conectar a GCS
+    if not gcs.connect():
+        print("[API] Error: No se pudo conectar a GCS")
+        return jsonify({"error": "Error de conexión a GCS"}), 500
     
-    return send_file(
-        file_path,
-        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        as_attachment=True,
-        download_name=safe_filename
-    )
+    # Verificar si el archivo existe en el bucket
+    if not gcs.blob_exists(blob_name):
+        print(f"[API] Archivo no encontrado en bucket: {blob_name}")
+        return jsonify({"error": "Archivo no encontrado en el bucket"}), 404
+    
+    # Opción 1: Redirigir a URL firmada
+    signed_url = gcs.get_signed_url(blob_name)
+    if signed_url:
+        return jsonify({
+            "filename": safe_filename,
+            "download_url": signed_url,
+            "message": "Use el download_url para descargar el archivo"
+        })
+    
+    # Opción 2: Descargar y enviar el archivo directamente
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+            if gcs.download_file(blob_name, tmp_file.name):
+                return send_file(
+                    tmp_file.name,
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    as_attachment=True,
+                    download_name=safe_filename
+                )
+            else:
+                return jsonify({"error": "Error al descargar archivo del bucket"}), 500
+    except Exception as e:
+        print(f"[API] Error al descargar: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/files', methods=['GET'])
 def list_files():
-    """Lista los archivos de resultados disponibles"""
-    print("[API] Listando archivos de resultados")
+    """Lista los archivos disponibles en el bucket de GCS"""
+    print("[API] Listando archivos del bucket")
     
-    files = []
-    if os.path.exists(RESULTS_FOLDER):
-        for f in os.listdir(RESULTS_FOLDER):
-            if f.endswith(('.xlsx', '.xls')):
-                file_path = os.path.join(RESULTS_FOLDER, f)
-                files.append({
-                    "filename": f,
-                    "size_bytes": os.path.getsize(file_path),
-                    "created": datetime.fromtimestamp(os.path.getctime(file_path)).isoformat()
-                })
+    # Conectar a GCS
+    if not gcs.connect():
+        print("[API] Error: No se pudo conectar a GCS")
+        return jsonify({"error": "Error de conexión a GCS"}), 500
+    
+    # Listar archivos del bucket (en la carpeta reportes/)
+    files = gcs.list_files(prefix="reportes/")
     
     return jsonify({
+        "bucket": gcs.bucket_name,
         "files": files,
         "count": len(files)
     })
@@ -254,4 +244,3 @@ if __name__ == '__main__':
     print("=" * 60)
     print("[API] Iniciando servidor...")
     app.run(host='0.0.0.0', port=5000, debug=True)
-

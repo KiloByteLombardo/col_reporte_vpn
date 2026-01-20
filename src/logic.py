@@ -9,12 +9,32 @@ import os
 from connections import BigQueryConnection, GCSConnection
 
 
+# Cabezales esperados para cada archivo
+HEADERS_R033 = [
+    "Orden de Compra", "Código Proveedor", "Sucursal Proveedor", "Proveedor",
+    "Cód. Tienda", "Tienda", "Estatus", "Días Condición (RMS)", "Unidades Recibidas",
+    "Documento", "Recepción", "Diferencia AP", "Saldo Herramienta", 
+    "Fecha Recepción", "Termino de Plazo"
+]
+
+HEADERS_R065 = [
+    "ORDEN COMPRA", "NRO FACTURA", "ID PROVEEDOR", "NOMBRE PROVEEDOR", "MENSAJE",
+    "ITEM 1", "ITEM 2", "VPN", "ITEM DESCRIPCION", "FECHA CREACION", 
+    "NOMBRE ARCHIVO", "ESTADO FACTURA", "ID PROVEEDOR PADRE", "NOMBRE PROVEEDOR PADRE",
+    "FECHA FACTURA", "SUBTTOTAL", "IMPUESTO", "TOTAL"
+]
+
+# Mensaje para filtrar en R065
+MENSAJE_FILTRO_R065 = "No se encuentra en RMS el ítem para esta factura"
+
+
 class ExcelProcessor:
     """Clase principal para procesar los archivos Excel R033 y R065"""
     
     def __init__(self):
         self.df_r033 = None
         self.df_r065 = None
+        self.df_r065_filtrado = None
         self.df_resultado = None
         self.excel_path = None
         self.processing_complete = threading.Event()
@@ -26,16 +46,60 @@ class ExcelProcessor:
         self.bq_connection = BigQueryConnection()
         self.gcs_connection = GCSConnection()
     
-    def load_excel_files(self, r033_file, r065_file) -> bool:
-        """Carga los archivos Excel R033 y R065 en DataFrames"""
+    def _find_header_row(self, file_path, expected_headers: list, max_rows: int = 20) -> int:
+        """
+        Busca la fila donde se encuentran los cabezales esperados
+        
+        Args:
+            file_path: Ruta del archivo Excel
+            expected_headers: Lista de cabezales esperados
+            max_rows: Máximo de filas a revisar
+        
+        Returns:
+            Número de fila donde están los cabezales (0-indexed), -1 si no se encuentra
+        """
         try:
-            print("[LOAD] Cargando archivo R033...")
-            self.df_r033 = pd.read_excel(r033_file, engine='openpyxl')
-            print(f"[LOAD] R033 cargado: {len(self.df_r033)} filas, {len(self.df_r033.columns)} columnas")
+            # Leer las primeras filas sin cabezal
+            df_preview = pd.read_excel(file_path, header=None, nrows=max_rows, engine='openpyxl')
             
-            print("[LOAD] Cargando archivo R065...")
-            self.df_r065 = pd.read_excel(r065_file, engine='openpyxl')
+            for row_idx in range(len(df_preview)):
+                row_values = df_preview.iloc[row_idx].astype(str).str.strip().tolist()
+                
+                # Verificar si la mayoría de los cabezales esperados están en esta fila
+                matches = sum(1 for header in expected_headers if header in row_values)
+                match_ratio = matches / len(expected_headers)
+                
+                if match_ratio >= 0.7:  # Al menos 70% de coincidencia
+                    print(f"[HEADER] Cabezales encontrados en fila {row_idx} ({matches}/{len(expected_headers)} coincidencias)")
+                    return row_idx
+            
+            print(f"[HEADER] No se encontraron cabezales. Usando fila 0 por defecto.")
+            return 0
+            
+        except Exception as e:
+            print(f"[HEADER] Error buscando cabezales: {str(e)}")
+            return 0
+    
+    def load_excel_files(self, r033_file, r065_file) -> bool:
+        """Carga los archivos Excel R033 y R065 en DataFrames, detectando automáticamente los cabezales"""
+        try:
+            # Cargar R033
+            print("[LOAD] Buscando cabezales en archivo R033...")
+            header_row_r033 = self._find_header_row(r033_file, HEADERS_R033)
+            
+            print(f"[LOAD] Cargando archivo R033 (cabezales en fila {header_row_r033})...")
+            self.df_r033 = pd.read_excel(r033_file, header=header_row_r033, engine='openpyxl')
+            print(f"[LOAD] R033 cargado: {len(self.df_r033)} filas, {len(self.df_r033.columns)} columnas")
+            print(f"[LOAD] Columnas R033: {list(self.df_r033.columns)}")
+            
+            # Cargar R065
+            print("[LOAD] Buscando cabezales en archivo R065...")
+            header_row_r065 = self._find_header_row(r065_file, HEADERS_R065)
+            
+            print(f"[LOAD] Cargando archivo R065 (cabezales en fila {header_row_r065})...")
+            self.df_r065 = pd.read_excel(r065_file, header=header_row_r065, engine='openpyxl')
             print(f"[LOAD] R065 cargado: {len(self.df_r065)} filas, {len(self.df_r065.columns)} columnas")
+            print(f"[LOAD] Columnas R065: {list(self.df_r065.columns)}")
             
             return True
         except Exception as e:
@@ -44,43 +108,77 @@ class ExcelProcessor:
             self.error_message = str(e)
             return False
     
+    def _filter_r065(self) -> pd.DataFrame:
+        """
+        Filtra el DataFrame R065 por el mensaje específico
+        Solo mantiene las filas donde MENSAJE = "No se encuentra en RMS el ítem para esta factura"
+        """
+        try:
+            print(f"[FILTER] Filtrando R065 por MENSAJE = '{MENSAJE_FILTRO_R065}'")
+            print(f"[FILTER] Filas antes del filtro: {len(self.df_r065)}")
+            
+            # Buscar la columna MENSAJE (puede tener variaciones en el nombre)
+            mensaje_col = None
+            for col in self.df_r065.columns:
+                if 'MENSAJE' in str(col).upper():
+                    mensaje_col = col
+                    break
+            
+            if mensaje_col is None:
+                print("[FILTER] ADVERTENCIA: No se encontró la columna MENSAJE en R065")
+                self.df_r065_filtrado = self.df_r065.copy()
+                return self.df_r065_filtrado
+            
+            print(f"[FILTER] Columna de mensaje encontrada: '{mensaje_col}'")
+            
+            # Filtrar por el mensaje específico
+            self.df_r065_filtrado = self.df_r065[
+                self.df_r065[mensaje_col].astype(str).str.strip() == MENSAJE_FILTRO_R065
+            ].copy()
+            
+            print(f"[FILTER] Filas después del filtro: {len(self.df_r065_filtrado)}")
+            print(f"[FILTER] Filas eliminadas: {len(self.df_r065) - len(self.df_r065_filtrado)}")
+            
+            return self.df_r065_filtrado
+            
+        except Exception as e:
+            print(f"[FILTER] Error al filtrar R065: {str(e)}")
+            self.df_r065_filtrado = self.df_r065.copy()
+            return self.df_r065_filtrado
+    
     def process_dataframes(self) -> pd.DataFrame:
         """
         Procesa y cruza los DataFrames R033 y R065
-        Esta función debe ser personalizada según la lógica de negocio específica
+        1. Filtra R065 por el mensaje específico
+        2. Crea el DataFrame de resultado
         """
         try:
             print("[PROCESS] Iniciando procesamiento de DataFrames...")
             
-            # Aquí va la lógica de cruce entre R033 y R065
-            # Por ahora, se hace un merge básico que deberás personalizar
+            # Paso 1: Filtrar R065
+            self._filter_r065()
             
-            # Limpieza básica de datos
-            df_r033_clean = self.df_r033.copy()
-            df_r065_clean = self.df_r065.copy()
+            if self.error_occurred:
+                return pd.DataFrame()
             
-            # Normalizar nombres de columnas (quitar espacios, minúsculas)
-            df_r033_clean.columns = df_r033_clean.columns.str.strip().str.lower().str.replace(' ', '_')
-            df_r065_clean.columns = df_r065_clean.columns.str.strip().str.lower().str.replace(' ', '_')
+            # Paso 2: Preparar DataFrames para el cruce
+            df_r033_work = self.df_r033.copy()
+            df_r065_work = self.df_r065_filtrado.copy()
             
-            print(f"[PROCESS] Columnas R033: {list(df_r033_clean.columns)}")
-            print(f"[PROCESS] Columnas R065: {list(df_r065_clean.columns)}")
+            print(f"[PROCESS] R033 tiene {len(df_r033_work)} filas")
+            print(f"[PROCESS] R065 filtrado tiene {len(df_r065_work)} filas")
             
-            # TODO: Aquí debes definir la columna clave para el cruce
-            # Por ejemplo: 'id', 'numero_documento', 'codigo', etc.
-            # Por defecto, concatenamos los dos DataFrames
-            
-            # Agregar columna de origen para identificar de qué archivo viene cada registro
-            df_r033_clean['origen'] = 'R033'
-            df_r065_clean['origen'] = 'R065'
-            
-            # Agregar timestamp de procesamiento
+            # Agregar columna de origen y timestamp
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            df_r033_clean['fecha_procesamiento'] = timestamp
-            df_r065_clean['fecha_procesamiento'] = timestamp
+            df_r033_work['origen'] = 'R033'
+            df_r033_work['fecha_procesamiento'] = timestamp
+            df_r065_work['origen'] = 'R065'
+            df_r065_work['fecha_procesamiento'] = timestamp
             
-            # Concatenar los DataFrames (modificar según lógica de negocio)
-            self.df_resultado = pd.concat([df_r033_clean, df_r065_clean], ignore_index=True)
+            # Paso 3: Crear DataFrame de resultado
+            # TODO: Aquí puedes agregar la lógica de cruce específica
+            # Por ahora, el resultado es el R065 filtrado con las columnas adicionales
+            self.df_resultado = df_r065_work.copy()
             
             print(f"[PROCESS] Procesamiento completado: {len(self.df_resultado)} filas resultantes")
             
@@ -106,9 +204,14 @@ class ExcelProcessor:
             
             # Crear el archivo Excel con formato
             with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+                # Hoja principal con el resultado
                 self.df_resultado.to_excel(writer, sheet_name='Resultado', index=False)
                 
-                # Opcional: agregar hojas adicionales con los datos originales
+                # Hoja con R065 filtrado
+                if self.df_r065_filtrado is not None:
+                    self.df_r065_filtrado.to_excel(writer, sheet_name='R065_Filtrado', index=False)
+                
+                # Hojas con datos originales
                 if self.df_r033 is not None:
                     self.df_r033.to_excel(writer, sheet_name='R033_Original', index=False)
                 if self.df_r065 is not None:
@@ -239,7 +342,10 @@ class ExcelProcessor:
             "success": True,
             "error": None,
             "excel_path": self.excel_path,
-            "rows_processed": len(self.df_resultado) if self.df_resultado is not None else 0
+            "rows_processed": len(self.df_resultado) if self.df_resultado is not None else 0,
+            "rows_r033": len(self.df_r033) if self.df_r033 is not None else 0,
+            "rows_r065_original": len(self.df_r065) if self.df_r065 is not None else 0,
+            "rows_r065_filtrado": len(self.df_r065_filtrado) if self.df_r065_filtrado is not None else 0
         }
 
 
@@ -258,4 +364,3 @@ def process_vpn_reports(r033_file, r065_file, output_path: str = None) -> dict:
     """
     processor = ExcelProcessor()
     return processor.execute(r033_file, r065_file, output_path)
-
