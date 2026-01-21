@@ -496,7 +496,7 @@ class ExcelProcessor:
             
             print(f"[PASO 5.1 - RESUMEN] ✓ Resumen creado: {len(df_resumen)} proveedores")
             
-            # Mostrar totales
+            # Calcular totales
             total_facturas = df_resumen['Número de Facturas'].sum() if 'Número de Facturas' in df_resumen.columns else 0
             total_monto = df_resumen['Monto Total'].sum() if 'Monto Total' in df_resumen.columns else 0
             total_items = df_resumen['Número de Ítems'].sum() if 'Número de Ítems' in df_resumen.columns else 0
@@ -505,11 +505,81 @@ class ExcelProcessor:
             print(f"[PASO 5.1 - RESUMEN]   - Total monto: {total_monto:,.2f}")
             print(f"[PASO 5.1 - RESUMEN]   - Total ítems: {total_items}")
             
+            # Agregar fila de totales al final
+            fila_totales = {
+                'Proveedor': 'TOTAL',
+                'Número de Facturas': total_facturas,
+                'Monto Total': total_monto,
+                'Número de Ítems': total_items
+            }
+            df_totales = pd.DataFrame([fila_totales])
+            df_resumen = pd.concat([df_resumen, df_totales], ignore_index=True)
+            
             return df_resumen
             
         except Exception as e:
             print(f"[PASO 5.1 - RESUMEN] ✗ Error creando resumen: {str(e)}")
             return pd.DataFrame()
+    
+    def _format_sheet(self, writer, sheet_name: str, df: pd.DataFrame, has_totals_row: bool = False):
+        """
+        Aplica formato a una hoja de Excel:
+        - Cabezales azul oscuro con letras blancas
+        - Ancho de columnas ajustado al contenido
+        - Fila de totales con formato especial (si aplica)
+        """
+        workbook = writer.book
+        worksheet = writer.sheets[sheet_name]
+        
+        # Formato para cabezales: azul oscuro, letras blancas, negrita
+        header_format = workbook.add_format({
+            'bold': True,
+            'font_color': 'white',
+            'bg_color': '#1F4E79',  # Azul oscuro
+            'border': 1,
+            'align': 'center',
+            'valign': 'vcenter'
+        })
+        
+        # Formato para fila de totales: azul claro, negrita
+        totals_format = workbook.add_format({
+            'bold': True,
+            'bg_color': '#D6E3F8',  # Azul claro
+            'border': 1,
+            'num_format': '#,##0.00'
+        })
+        
+        totals_format_text = workbook.add_format({
+            'bold': True,
+            'bg_color': '#D6E3F8',  # Azul claro
+            'border': 1
+        })
+        
+        # Aplicar formato a los cabezales (fila 0)
+        for col_num, column_name in enumerate(df.columns):
+            worksheet.write(0, col_num, column_name, header_format)
+            
+            # Calcular ancho de columna basado en el contenido
+            max_length = len(str(column_name))
+            
+            # Revisar el contenido de la columna para obtener el máximo
+            for value in df[column_name].astype(str):
+                if len(value) > max_length:
+                    max_length = len(value)
+            
+            # Ajustar ancho (agregar un poco de padding)
+            adjusted_width = min(max_length + 2, 50)  # Máximo 50 caracteres
+            worksheet.set_column(col_num, col_num, adjusted_width)
+        
+        # Aplicar formato a la fila de totales (última fila)
+        if has_totals_row and len(df) > 0:
+            last_row = len(df)  # +1 por el header, pero ya está en 0-indexed
+            for col_num, column_name in enumerate(df.columns):
+                value = df.iloc[-1][column_name]
+                if column_name == 'Proveedor':
+                    worksheet.write(last_row, col_num, value, totals_format_text)
+                else:
+                    worksheet.write(last_row, col_num, value, totals_format)
     
     def create_excel(self, output_path: str, include_originals: bool = False) -> bool:
         """
@@ -532,10 +602,12 @@ class ExcelProcessor:
                 # Hoja Resumen primero
                 if not df_resumen.empty:
                     df_resumen.to_excel(writer, sheet_name='Resumen', index=False)
-                    print(f"[PASO 5 - CREAR EXCEL]   - Hoja 'Resumen' creada ({len(df_resumen)} proveedores)")
+                    self._format_sheet(writer, 'Resumen', df_resumen, has_totals_row=True)
+                    print(f"[PASO 5 - CREAR EXCEL]   - Hoja 'Resumen' creada ({len(df_resumen) - 1} proveedores + fila totales)")
                 
                 # Hoja principal - Resultado
                 self.df_resultado.to_excel(writer, sheet_name='Resultado', index=False)
+                self._format_sheet(writer, 'Resultado', self.df_resultado)
                 print(f"[PASO 5 - CREAR EXCEL]   - Hoja 'Resultado' creada ({len(self.df_resultado)} filas)")
                 
                 # Hojas originales solo si se solicita (¡muy lento con archivos grandes!)
