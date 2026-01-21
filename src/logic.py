@@ -31,6 +31,40 @@ HEADERS_R065 = [
 # Mensaje para filtrar en R065
 MENSAJE_FILTRO_R065 = "No se encuentra en RMS el ítem para esta factura"
 
+# Mapeo de columnas del DataFrame a BigQuery
+COLUMN_MAPPING_BQ = {
+    "ORDEN COMPRA": "col_vpn_orden_compra",
+    "NRO FACTURA": "col_vpn_nro_factura",
+    "ID PROVEEDOR": "col_vpn_id_proveedor",
+    "NOMBRE PROVEEDOR": "col_vpn_nombre_proveedor",
+    "MENSAJE": "col_vpn_mensaje",
+    "ITEM 1": "col_vpn_item_1",
+    "ITEM 2": "col_vpn_item_2",
+    "VPN": "col_vpn_column_vpn",
+    "ITEM DESCRIPCION": "col_vpn_item_descripcion",
+    "FECHA CREACION": "col_vpn_fecha_creacion",
+    "NOMBRE ARCHIVO": "col_vpn_nombre_archivo",
+    "ESTADO FACTURA": "col_vpn_estado_factura",
+    "ID PROVEEDOR PADRE": "col_vpn_id_proveedor_padre",
+    "NOMBRE PROVEEDOR PADRE": "col_vpn_nombre_proveedor_padre",
+    "FECHA FACTURA": "col_vpn_fecha_factura",
+    "SUBTTOTAL": "col_vpn_subtotal",
+    "IMPUESTO": "col_vpn_impuesto",
+    "TOTAL": "col_vpn_total",
+    "Centro de Costo": "col_vpn_centro_costo",
+    "Estatus R033": "col_vpn_estatus_r033",
+    "Grupo de Pago": "col_vpn_grupo_pago"
+}
+
+# Columnas numéricas que deben ser FLOAT
+FLOAT_COLUMNS_BQ = ["col_vpn_subtotal", "col_vpn_impuesto", "col_vpn_total"]
+
+# Columnas de fecha
+DATE_COLUMNS_BQ = {
+    "col_vpn_fecha_creacion": "datetime",  # DATETIME
+    "col_vpn_fecha_factura": "date"        # DATE
+}
+
 
 # =============================================================================
 # CLASE PRINCIPAL
@@ -640,24 +674,89 @@ class ExcelProcessor:
     # PASO 6: SUBIR A BIGQUERY (HILO 2)
     # =========================================================================
     
-    def upload_to_bigquery(self, table_name: str = "reporte_vpn") -> bool:
-        """Sube el DataFrame de resultado a BigQuery"""
+    def _prepare_dataframe_for_bigquery(self) -> pd.DataFrame:
+        """
+        Prepara el DataFrame para BigQuery:
+        1. Renombra columnas según el mapeo
+        2. Convierte tipos de datos
+        3. Agrega columna timestamp
+        """
+        print(f"\n[PASO 6.1 - PREPARAR BQ] Preparando DataFrame para BigQuery...")
+        
+        df_bq = self.df_resultado.copy()
+        
+        # Paso 1: Renombrar columnas según el mapeo
+        columns_renamed = {}
+        for old_name, new_name in COLUMN_MAPPING_BQ.items():
+            # Buscar la columna (puede tener variaciones)
+            for col in df_bq.columns:
+                if str(col).strip().upper() == old_name.upper():
+                    columns_renamed[col] = new_name
+                    break
+        
+        df_bq = df_bq.rename(columns=columns_renamed)
+        print(f"[PASO 6.1 - PREPARAR BQ]   - Columnas renombradas: {len(columns_renamed)}")
+        
+        # Paso 2: Convertir columnas numéricas a FLOAT
+        for col in FLOAT_COLUMNS_BQ:
+            if col in df_bq.columns:
+                df_bq[col] = pd.to_numeric(df_bq[col], errors='coerce').fillna(0.0)
+        print(f"[PASO 6.1 - PREPARAR BQ]   - Columnas numéricas convertidas")
+        
+        # Paso 3: Convertir columnas de fecha
+        for col, date_type in DATE_COLUMNS_BQ.items():
+            if col in df_bq.columns:
+                try:
+                    if date_type == "datetime":
+                        df_bq[col] = pd.to_datetime(df_bq[col], errors='coerce')
+                    elif date_type == "date":
+                        df_bq[col] = pd.to_datetime(df_bq[col], errors='coerce').dt.date
+                except Exception as e:
+                    print(f"[PASO 6.1 - PREPARAR BQ]   ⚠ Error convirtiendo {col}: {str(e)}")
+        print(f"[PASO 6.1 - PREPARAR BQ]   - Columnas de fecha convertidas")
+        
+        # Paso 4: Agregar timestamp actual
+        df_bq['col_vpn_timestamp'] = datetime.now()
+        print(f"[PASO 6.1 - PREPARAR BQ]   - Timestamp agregado")
+        
+        # Paso 5: Convertir todas las columnas STRING a str y limpiar
+        string_cols = [col for col in df_bq.columns if col not in FLOAT_COLUMNS_BQ 
+                       and col not in DATE_COLUMNS_BQ.keys() 
+                       and col != 'col_vpn_timestamp']
+        for col in string_cols:
+            df_bq[col] = df_bq[col].astype(str).replace('nan', '').replace('None', '')
+        
+        print(f"[PASO 6.1 - PREPARAR BQ] ✓ DataFrame preparado")
+        print(f"[PASO 6.1 - PREPARAR BQ]   - Filas: {len(df_bq)}")
+        print(f"[PASO 6.1 - PREPARAR BQ]   - Columnas: {list(df_bq.columns)}")
+        
+        return df_bq
+    
+    def upload_to_bigquery(self, table_name: str = None) -> bool:
+        """Sube el DataFrame de resultado a BigQuery con los nombres de columnas correctos"""
+        # Usar variable de entorno si no se especifica
+        if table_name is None:
+            table_name = os.getenv("BQ_TABLE_NAME", "reporte_vpn")
+        
         print(f"\n[PASO 6 - BIGQUERY] Iniciando subida...")
         print(f"[PASO 6 - BIGQUERY] Tabla destino: {table_name}")
         
         try:
+            # Preparar DataFrame con nombres y tipos de BigQuery
+            df_bq = self._prepare_dataframe_for_bigquery()
+            
             if not self.bq_connection.connect():
                 print("[PASO 6 - BIGQUERY] ⚠ No se pudo conectar, continuando sin subir")
                 return False
             
             success = self.bq_connection.insert_dataframe(
-                self.df_resultado, 
+                df_bq, 
                 table_name, 
                 if_exists="append"
             )
             
             if success:
-                print(f"[PASO 6 - BIGQUERY] ✓ Datos insertados: {len(self.df_resultado)} filas")
+                print(f"[PASO 6 - BIGQUERY] ✓ Datos insertados: {len(df_bq)} filas")
             else:
                 print("[PASO 6 - BIGQUERY] ✗ Error al insertar datos")
             
@@ -734,7 +833,7 @@ class ExcelProcessor:
     # FUNCIÓN PRINCIPAL (MAIN)
     # =========================================================================
     
-    def main(self, r033_file, r065_file, output_path: str = None, table_name: str = "reporte_vpn") -> dict:
+    def main(self, r033_file, r065_file, output_path: str = None, table_name: str = None) -> dict:
         """
         FUNCIÓN PRINCIPAL - Orquesta todo el flujo de procesamiento
         
@@ -867,7 +966,7 @@ class ExcelProcessor:
     # MÉTODO LEGACY (mantiene compatibilidad)
     # =========================================================================
     
-    def execute(self, r033_file, r065_file, output_path: str = None, table_name: str = "reporte_vpn") -> dict:
+    def execute(self, r033_file, r065_file, output_path: str = None, table_name: str = None) -> dict:
         """Alias de main() para mantener compatibilidad"""
         return self.main(r033_file, r065_file, output_path, table_name)
 

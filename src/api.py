@@ -132,7 +132,10 @@ def process_files():
                 "gcs_url": None
             })
         
-        blob_name = f"reportes/{output_filename}"
+        # Organizar en carpeta por fecha (YYYY-MM-DD)
+        fecha_carpeta = datetime.now().strftime('%Y-%m-%d')
+        blob_name = f"reportes/{fecha_carpeta}/{output_filename}"
+        
         if gcs.upload_file(output_path, blob_name):
             # Generar URL de descarga
             download_url = gcs.get_signed_url(blob_name)
@@ -150,6 +153,7 @@ def process_files():
                 "rows_processed": result["rows_processed"],
                 "filename": output_filename,
                 "gcs_path": blob_name,
+                "gcs_folder": fecha_carpeta,
                 "download_url": download_url,
                 "public_url": public_url,
                 "timestamp": timestamp
@@ -174,13 +178,25 @@ def process_files():
 
 
 @app.route('/download/<filename>', methods=['GET'])
-def download_file(filename: str):
-    """Endpoint para descargar un archivo del bucket de GCS"""
-    print(f"[API] Solicitud de descarga desde bucket: {filename}")
+@app.route('/download/<fecha>/<filename>', methods=['GET'])
+def download_file(filename: str, fecha: str = None):
+    """
+    Endpoint para descargar un archivo del bucket de GCS
+    
+    Rutas:
+    - /download/<filename> - Busca en la carpeta de hoy
+    - /download/<fecha>/<filename> - Busca en la carpeta de la fecha especificada (YYYY-MM-DD)
+    """
+    print(f"[API] Solicitud de descarga desde bucket: {filename}, fecha: {fecha}")
     
     # Sanitizar nombre de archivo
     safe_filename = secure_filename(filename)
-    blob_name = f"reportes/{safe_filename}"
+    
+    # Si no se especifica fecha, usar la de hoy
+    if fecha is None:
+        fecha = datetime.now().strftime('%Y-%m-%d')
+    
+    blob_name = f"reportes/{fecha}/{safe_filename}"
     
     # Conectar a GCS
     if not gcs.connect():
@@ -190,13 +206,15 @@ def download_file(filename: str):
     # Verificar si el archivo existe en el bucket
     if not gcs.blob_exists(blob_name):
         print(f"[API] Archivo no encontrado en bucket: {blob_name}")
-        return jsonify({"error": "Archivo no encontrado en el bucket"}), 404
+        return jsonify({"error": f"Archivo no encontrado en el bucket: {blob_name}"}), 404
     
     # Opción 1: Redirigir a URL firmada
     signed_url = gcs.get_signed_url(blob_name)
     if signed_url:
         return jsonify({
             "filename": safe_filename,
+            "folder": fecha,
+            "gcs_path": blob_name,
             "download_url": signed_url,
             "message": "Use el download_url para descargar el archivo"
         })

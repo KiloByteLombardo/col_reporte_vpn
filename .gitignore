@@ -210,3 +210,5 @@ results/
 *.xlsx
 *.xls
 *.ps1
+
+credentials.json

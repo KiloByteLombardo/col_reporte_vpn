@@ -3,9 +3,51 @@ Módulo de conexiones a Google Cloud Storage y BigQuery
 """
 from google.cloud import storage
 from google.cloud import bigquery
+from google.oauth2 import service_account
 import pandas as pd
 import os
-from datetime import timedelta
+from datetime import timedelta, datetime
+
+# Ruta al archivo de credenciales
+CREDENTIALS_FILE = "credentials.json"
+
+
+def get_credentials():
+    """
+    Obtiene las credenciales de GCP.
+    Primero busca el archivo credentials.json en varias ubicaciones.
+    Si no lo encuentra, intenta usar ADC (Application Default Credentials).
+    """
+    print("[AUTH] Buscando credenciales...")
+    
+    # Buscar en diferentes ubicaciones
+    possible_paths = [
+        CREDENTIALS_FILE,
+        os.path.join(os.path.dirname(__file__), CREDENTIALS_FILE),
+        os.path.join(os.path.dirname(__file__), '..', CREDENTIALS_FILE),
+        '/app/credentials.json',
+        '/app/src/credentials.json',
+        './credentials.json',
+        '../credentials.json'
+    ]
+    
+    # Mostrar rutas donde busca
+    print(f"[AUTH] Buscando credentials.json en:")
+    for path in possible_paths:
+        abs_path = os.path.abspath(path)
+        exists = os.path.exists(path)
+        print(f"[AUTH]   - {abs_path}: {'✓ ENCONTRADO' if exists else '✗ no existe'}")
+        if exists:
+            print(f"[AUTH] ✓ Usando credenciales de archivo: {abs_path}")
+            try:
+                return service_account.Credentials.from_service_account_file(path)
+            except Exception as e:
+                print(f"[AUTH] ✗ Error cargando credenciales: {str(e)}")
+                continue
+    
+    # Si no se encontró el archivo, usar ADC
+    print("[AUTH] ⚠ No se encontró credentials.json, intentando usar ADC...")
+    return None  # Intentar ADC
 
 
 class GCSConnection:
@@ -18,9 +60,15 @@ class GCSConnection:
         self.bucket = None
     
     def connect(self):
-        """Establece conexión con GCS"""
+        """Establece conexión con GCS (usa credentials.json si no hay ADC)"""
         try:
-            self.client = storage.Client(project=self.project_id)
+            credentials = get_credentials()
+            
+            if credentials:
+                self.client = storage.Client(project=self.project_id, credentials=credentials)
+            else:
+                self.client = storage.Client(project=self.project_id)
+            
             self.bucket = self.client.bucket(self.bucket_name)
             print(f"[GCS] Conexión establecida con bucket: {self.bucket_name}")
             return True
@@ -138,15 +186,22 @@ class GCSConnection:
 class BigQueryConnection:
     """Clase para manejar conexiones a BigQuery"""
     
-    def __init__(self, project_id: str = None, dataset_id: str = None):
+    def __init__(self, project_id: str = None, dataset_id: str = None, table_name: str = None):
         self.project_id = project_id or os.getenv("GCP_PROJECT_ID")
         self.dataset_id = dataset_id or os.getenv("BQ_DATASET_ID")
+        self.table_name = table_name or os.getenv("BQ_TABLE_NAME", "reporte_vpn")
         self.client = None
     
     def connect(self):
-        """Establece conexión con BigQuery"""
+        """Establece conexión con BigQuery (usa credentials.json si no hay ADC)"""
         try:
-            self.client = bigquery.Client(project=self.project_id)
+            credentials = get_credentials()
+            
+            if credentials:
+                self.client = bigquery.Client(project=self.project_id, credentials=credentials)
+            else:
+                self.client = bigquery.Client(project=self.project_id)
+            
             print(f"[BigQuery] Conexión establecida con proyecto: {self.project_id}")
             return True
         except Exception as e:
