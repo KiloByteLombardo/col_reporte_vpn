@@ -7,6 +7,7 @@ from werkzeug.utils import secure_filename
 import os
 import tempfile
 from datetime import datetime
+import pytz
 from logic import ExcelProcessor
 from connections import GCSConnection
 from flask_cors import CORS
@@ -14,6 +15,9 @@ from flask_cors import CORS
 app = Flask(__name__)
 
 CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Zona horaria de Venezuela (Caracas) - UTC-4
+TIMEZONE_CARACAS = pytz.timezone('America/Caracas')
 
 # Configuración
 RESULTS_FOLDER = 'results'
@@ -135,8 +139,8 @@ def process_files():
                 "gcs_url": None
             })
         
-        # Organizar en carpeta por fecha (YYYY-MM-DD)
-        fecha_carpeta = datetime.now().strftime('%Y-%m-%d')
+        # Organizar en carpeta por fecha (YYYY-MM-DD) - Hora de Caracas UTC-4
+        fecha_carpeta = datetime.now(TIMEZONE_CARACAS).strftime('%Y-%m-%d')
         blob_name = f"reportes/{fecha_carpeta}/{output_filename}"
         
         if gcs.upload_file(output_path, blob_name):
@@ -195,9 +199,9 @@ def download_file(filename: str, fecha: str = None):
     # Sanitizar nombre de archivo
     safe_filename = secure_filename(filename)
     
-    # Si no se especifica fecha, usar la de hoy
+    # Si no se especifica fecha, usar la de hoy (hora de Caracas UTC-4)
     if fecha is None:
-        fecha = datetime.now().strftime('%Y-%m-%d')
+        fecha = datetime.now(TIMEZONE_CARACAS).strftime('%Y-%m-%d')
     
     blob_name = f"reportes/{fecha}/{safe_filename}"
     
