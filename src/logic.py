@@ -6,7 +6,11 @@ import pandas as pd
 import threading
 from datetime import datetime
 import os
+import pytz
 from connections import BigQueryConnection, GCSConnection
+
+# Zona horaria de Venezuela (Caracas) - UTC-4
+TIMEZONE_CARACAS = pytz.timezone('America/Caracas')
 
 
 # =============================================================================
@@ -465,7 +469,7 @@ class ExcelProcessor:
             proveedor_col = self._find_column(df, ["NOMBRE PROVEEDOR PADRE"], exact_match=True)
             factura_col = self._find_column(df, ["NRO FACTURA"])
             monto_col = self._find_column(df, ["TOTAL"], exact_match=True)
-            item_col = self._find_column(df, ["ITEM 1"], exact_match=True)  # Columna de ítem
+            item_col = self._find_column(df, ["ITEM DESCRIPCION"], exact_match=True)  # Columna de ítem
             
             if proveedor_col is None:
                 print(f"[PASO 5.1 - RESUMEN] ⚠ No se encontró columna de proveedor")
@@ -715,9 +719,9 @@ class ExcelProcessor:
                     print(f"[PASO 6.1 - PREPARAR BQ]   ⚠ Error convirtiendo {col}: {str(e)}")
         print(f"[PASO 6.1 - PREPARAR BQ]   - Columnas de fecha convertidas")
         
-        # Paso 4: Agregar timestamp actual
-        df_bq['col_vpn_timestamp'] = datetime.now()
-        print(f"[PASO 6.1 - PREPARAR BQ]   - Timestamp agregado")
+        # Paso 4: Agregar timestamp actual (hora de Caracas, Venezuela UTC-4)
+        df_bq['col_vpn_timestamp'] = datetime.now(TIMEZONE_CARACAS)
+        print(f"[PASO 6.1 - PREPARAR BQ]   - Timestamp agregado (Caracas UTC-4)")
         
         # Paso 5: Convertir todas las columnas STRING a str y limpiar
         string_cols = [col for col in df_bq.columns if col not in FLOAT_COLUMNS_BQ 
