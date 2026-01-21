@@ -9,8 +9,11 @@ import tempfile
 from datetime import datetime
 from logic import ExcelProcessor
 from connections import GCSConnection
+from flask_cors import CORS
 
 app = Flask(__name__)
+
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Configuración
 RESULTS_FOLDER = 'results'
