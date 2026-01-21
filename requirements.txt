@@ -6,3 +6,4 @@ google-cloud-storage==2.14.0
 google-cloud-bigquery==3.14.1
 pyarrow==14.0.2
 werkzeug==3.0.1
+flask-cors==5.0.0

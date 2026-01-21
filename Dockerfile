@@ -18,8 +18,8 @@ COPY src/ ./src/
 # Crear carpeta de resultados
 RUN mkdir -p results
 
-# Exponer puerto
-EXPOSE 5000
+# Exponer puerto (Cloud Run usa la variable PORT)
+EXPOSE 8080
 
 # Directorio de trabajo para la app
 WORKDIR /app/src

@@ -263,5 +263,12 @@ if __name__ == '__main__':
     print("=" * 60)
     print("  COL REPORTE VPN - API Flask")
     print("=" * 60)
-    print("[API] Iniciando servidor...")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    
+    # Cloud Run usa la variable PORT, default 5000 para desarrollo local
+    port = int(os.environ.get('PORT', 5000))
+    debug_mode = os.environ.get('FLASK_DEBUG', '0') == '1'
+    
+    print(f"[API] Iniciando servidor en puerto {port}...")
+    print(f"[API] Debug mode: {debug_mode}")
+    
+    app.run(host='0.0.0.0', port=port, debug=debug_mode)
